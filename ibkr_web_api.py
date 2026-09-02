@@ -44,19 +44,39 @@ BASE_URL = "https://127.0.0.1:5000/v1/api"
 _conid_cache: dict[str, int] = {}
 
 
+_session_cache = None
+
+
 def _get_session():
     """
     Bouwt een requests.Session op met het zelfondertekende certificaat
     van de Gateway genegeerd (verify=False) -- consistent met hoe
     IBeam en onze eerdere curl-tests dit ook deden.
-    """
-    import requests
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    session = requests.Session()
-    session.verify = False
-    return session
+    KRITIEKE FIX (1 sep 2026): hergebruikt nu ÉÉN gedeelde sessie
+    (module-level cache) in plaats van bij ELKE aanroep een gloednieuwe
+    requests.Session() op te zetten -- dat laatste betekende een NIEUWE
+    TCP/TLS-verbinding bij elke van de 10 aanroepplekken in dit bestand.
+    Met onze asyncio.gather()-aanpak (tot 3 symbolen gelijktijdig, elk
+    met meerdere data-aanroepen) leidde dat tot meerdere GELIJKTIJDIGE,
+    verse verbindingen naar dezelfde lokale Gateway -- een plausibele
+    (deel)verklaring voor de herhaalde 503 Service Unavailable-fouten
+    die we eind augustus meerdere dagen op rij zagen.
+
+    requests.Session-objecten zijn thread-safe voor gelijktijdig gebruik
+    (de onderliggende urllib3-connectionpool regelt dit intern), dus dit
+    is veilig te delen tussen de threads die asyncio.to_thread() gebruikt.
+    """
+    global _session_cache
+    if _session_cache is None:
+        import requests
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        _session_cache = requests.Session()
+        _session_cache.verify = False
+        logger.info("Nieuwe, gedeelde IBKR-sessie aangemaakt (wordt hergebruikt voor alle aanroepen).")
+    return _session_cache
 
 
 def tickle() -> bool:
