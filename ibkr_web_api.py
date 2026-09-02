@@ -210,6 +210,17 @@ def get_historical_bars(conid: int, period: str = "5d", bar: str = "15min", max_
     """
     session = _get_session()
     TIJDELIJKE_FOUTCODES = (502, 503, 504)
+    # NIEUW (2 sep 2026, bugfix): 429 (Too Many Requests) is een ECHTE
+    # rate-limiet van IBKR's Web API -- ontdekt bij de overstap naar de
+    # volledige-watchlist-scan (26 symbolen i.p.v. 3), waarbij meerdere
+    # gelijktijdige symbolen (ook al beperkt tot 5 tegelijk via een
+    # Semaphore in main.py) toch de limiet raakten. In tegenstelling tot
+    # 502/503/504 (server tijdelijk overbelast, snel weer beschikbaar)
+    # betekent een 429 letterlijk "u gaat te snel" -- een even korte
+    # pauze (3s) zou dezelfde limiet direct weer kunnen raken, dus een
+    # LANGERE pauze (8s) vóór een nieuwe poging.
+    RATE_LIMIT_FOUTCODE = 429
+    RATE_LIMIT_WACHTTIJD = 8
 
     for poging in range(1, max_retries + 1):
         try:
@@ -228,6 +239,10 @@ def get_historical_bars(conid: int, period: str = "5d", bar: str = "15min", max_
             if status_code in TIJDELIJKE_FOUTCODES and poging < max_retries:
                 logger.warning(f"Tijdelijke serverfout ({status_code}) bij conid {conid}, poging {poging}/{max_retries} -- opnieuw proberen na 3s.")
                 time.sleep(3)
+                continue
+            if status_code == RATE_LIMIT_FOUTCODE and poging < max_retries:
+                logger.warning(f"Rate-limiet (429) bij conid {conid}, poging {poging}/{max_retries} -- opnieuw proberen na {RATE_LIMIT_WACHTTIJD}s.")
+                time.sleep(RATE_LIMIT_WACHTTIJD)
                 continue
             logger.error(f"Kon historische data niet ophalen voor conid {conid}: {e}")
             return []
