@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 from datetime import datetime
 
 from state_module import load_state
@@ -274,6 +275,15 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
 
     async def _run_symbol_async(symbol: str, news_reason: str):
         async with semafoor:
+            # NIEUW (2 sep 2026, aanvullende bugfix): een kleine,
+            # willekeurige opstartvertraging (0-3s) VOORDAT dit symbool
+            # zijn eerste IBKR-aanvraag doet -- voorkomt dat de eerste
+            # batch van 5 (vrijgegeven door de Semaphore) allemaal
+            # EXACT tegelijk hun eerste aanvraag doen, wat het
+            # "kudde-effect" bij de rate-limiet (429) live meetekende
+            # veroorzaakte, zelfs met de latere jitter op de
+            # retry-wachttijd in ibkr_web_api.py.
+            await asyncio.sleep(random.uniform(0, 3))
             logger.info(f"--- Symbool: {symbol} ({news_reason}) ---")
             try:
                 return await asyncio.to_thread(run_reversal_symbol_cycle, symbol, allocated_capital, dry_run)
