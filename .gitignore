@@ -1,0 +1,8 @@
+.env
+logs/
+__pycache__/
+*.pyc
+state.json
+main.py.save
+2.8,
+3.0
