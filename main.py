@@ -320,6 +320,28 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     executed = [r for r in results if r["status"] in ("dry_run_complete", "trade_complete", "trade_dispatched", "dispatched")]
     logger.info(f"=== Cyclus afgerond: {len(executed)}/{len(chosen)} trades uitgevoerd ===")
 
+    # NIEUW (3 sep 2026, op verzoek): één samenvattend Telegram-bericht
+    # met ALLE vandaag gekwalificeerde aandelen (manipulatie-candle
+    # bevestigd, bewaking gestart), verstuurd zodra de HELE cyclus
+    # klaar is met de ATR-check-fase -- bewust niet per aandeel apart
+    # (zou bij 20+ kandidaten te veel ruis geven), en bewust NA afloop
+    # i.p.v. live bijgewerkt (de ATR-checks lopen dankzij de Semaphore
+    # + jitter toch niet allemaal exact gelijktijdig, maar zijn na een
+    # paar minuten altijd wel allemaal afgerond).
+    if not dry_run and executed:
+        gedispatchte = [r for r in results if r["status"] == "dispatched"]
+        if gedispatchte:
+            regels = [f"• {r['symbol']} ({r.get('direction', '?')})" for r in gedispatchte]
+            samenvatting = (
+                f"🔍 {len(gedispatchte)} aandelen gekwalificeerd vandaag (manipulatie-candle bevestigd, "
+                f"bewaking gestart tot 17:00):\n" + "\n".join(regels)
+            )
+            try:
+                from telegram_notify import send_telegram_message
+                send_telegram_message(samenvatting)
+            except Exception as e:
+                logger.error(f"Kon samenvattende kwalificatie-melding niet versturen: {e}")
+
     return {"status": "cycle_complete", "trade_count": len(executed), "results": results}
 
 
