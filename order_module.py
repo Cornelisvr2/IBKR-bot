@@ -568,7 +568,7 @@ def _notify_safe(message: str) -> None:
         logger.error(f"Kon Telegram-melding niet versturen: {e}")
 
 
-def execute_managed_trade(spec: BracketOrderSpec, symbol: str) -> dict:
+def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_minutes: float = None) -> dict:
     """
     Orkestreert de volledige zelf-beheerde OCO-flow: entry plaatsen ->
     wachten op fill -> TP/SL plaatsen -> bewaken tot de één de ander
@@ -601,7 +601,16 @@ def execute_managed_trade(spec: BracketOrderSpec, symbol: str) -> dict:
         f"TP {spec.take_profit:.2f} / SL {spec.stop_loss:.2f} | Risico: €{risk_amount:,.2f}"
     )
 
-    fill_status = wait_for_entry_fill(order_id, account_id)
+    # NIEUW (3 sep 2026, bugfix): de fill-wachttijd wordt nu begrensd
+    # door de RESTERENDE tijd tot de 90-minuten-strategiedeadline
+    # (indien meegegeven door de aanroeper), i.p.v. altijd de eigen,
+    # losstaande ORDER_TIMEOUT_MINUTES te gebruiken -- loste een live
+    # gevonden bug op waarbij een entry gevonden vlak vóór de deadline
+    # alsnog tot 14 minuten NA de deadline kon vullen (META, 3 sep 2026).
+    if max_fill_wait_minutes is not None:
+        fill_status = wait_for_entry_fill(order_id, account_id, timeout_minutes=max_fill_wait_minutes)
+    else:
+        fill_status = wait_for_entry_fill(order_id, account_id)
     if fill_status != "Filled":
         _notify_safe(f"⏱️ {symbol}: entry niet gevuld binnen de tijdslimiet ({fill_status}) -- order geannuleerd.")
         return {"status": "entry_not_filled", "symbol": symbol, "fill_status": fill_status}
