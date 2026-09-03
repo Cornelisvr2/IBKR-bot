@@ -120,6 +120,19 @@ def run_reversal_symbol_cycle(symbol: str, capital: float, dry_run: bool) -> dic
         logger.warning(reason)
         return {"status": "skipped", "symbol": symbol, "reason": reason}
 
+    # NIEUW (3 sep 2026, bugfix): de openingscandle-check hierboven ving
+    # ALLEEN een mislukte 15-MINUTEN-fetch op -- de DAG-candles (nodig
+    # voor de ATR-berekening) hebben hun EIGEN, aparte HTTP-aanroep en
+    # dus ook hun EIGEN kans om te mislukken (bv. bij aanhoudende
+    # 429-druk, na uitputting van alle retry-pogingen). Zonder deze
+    # check kon calculate_atr() een LEGE lijst krijgen en een
+    # onopgevangen fout gooien -- live gebeurd bij XOM/MA/CVX (3 sep
+    # 2026) tijdens een zware-belasting-test met alle 26 symbolen.
+    if not daily_candles or len(daily_candles) < 15:
+        reason = f"Onvoldoende dagcandles voor {symbol} ({len(daily_candles)} beschikbaar) -- cyclus overgeslagen."
+        logger.warning(reason)
+        return {"status": "skipped", "symbol": symbol, "reason": reason}
+
     atr = calculate_atr(daily_candles)
     validation = validate_opening_range(opening_candle, atr)
     if not validation["valid"]:
