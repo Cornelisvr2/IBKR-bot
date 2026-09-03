@@ -30,6 +30,7 @@ import argparse
 import logging
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -117,7 +118,25 @@ def main():
         )
 
         logger.info(f"Omkeerpatroon bevestigd voor {args.symbol}: {spec.reason} -- trade wordt nu geplaatst.")
-        result = execute_managed_trade(spec, args.symbol)
+
+        # NIEUW (3 sep 2026, bugfix): bereken de RESTERENDE tijd tot de
+        # 90-minuten-strategiedeadline (FORCED_CLOSE_TIME), en geef die
+        # mee als bovengrens voor de entry-fill-wachttijd -- voorkomt
+        # dat een laat-gevonden signaal (bv. vlak vóór 17:00) via de
+        # eigen, losstaande 75-minuten-fill-timeout alsnog ver NA de
+        # deadline kan vullen (live gebeurd bij META, 3 sep 2026: fill
+        # om 17:14, 14 minuten na de bedoelde afkap). Een kleine,
+        # positieve ondergrens (1 minuut) voorkomt een direct-annuleren
+        # bij een deadline die al zeer dichtbij is.
+        nu = datetime.now()
+        deadline_vandaag = nu.replace(
+            hour=FORCED_CLOSE_TIME.hour, minute=FORCED_CLOSE_TIME.minute,
+            second=FORCED_CLOSE_TIME.second, microsecond=0,
+        )
+        resterende_minuten = max(1.0, (deadline_vandaag - nu).total_seconds() / 60)
+        logger.info(f"{args.symbol}: nog {resterende_minuten:.1f} minuten tot de deadline -- fill-wachttijd hierop begrensd.")
+
+        result = execute_managed_trade(spec, args.symbol, max_fill_wait_minutes=resterende_minuten)
         logger.info(f"Trade afgerond: {result}")
 
     except Exception as e:
