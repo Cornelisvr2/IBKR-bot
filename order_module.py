@@ -514,12 +514,19 @@ def report_trade_outcome(spec: BracketOrderSpec, symbol: str, outcome: dict, ent
 
     # Trade journal (CSV, voor latere analyse)
     try:
+        # BUGFIX (4 sep 2026): de journal-notitie was HARDGECODEERD op
+        # "benadering", ONGEACHT de al-correct-berekende
+        # `prices_are_exact`-variabele (die al wél correct werd
+        # gebruikt voor de Telegram-melding hierboven). De daadwerkelijk
+        # OPGESLAGEN prijzen (used_entry_price/exit_price) waren al
+        # correct exact-voorkeurend -- alleen het LABEL loog altijd.
+        journal_pnl_note = "exacte fill-prijzen" if prices_are_exact else "benadering o.b.v. beoogde prijzen (fill niet volledig opgehaald)"
         log_trade({
             "symbol": symbol, "direction": direction,
             "entry_price": used_entry_price, "take_profit": spec.take_profit,
             "stop_loss": spec.stop_loss, "quantity": spec.quantity,
             "result": result, "pnl_estimate": pnl,
-            "pnl_note": "benadering o.b.v. beoogde prijzen, niet exacte fill",
+            "pnl_note": journal_pnl_note,
         })
     except Exception as e:
         logger.error(f"Kon trade niet loggen in journal voor {symbol}: {e}")
