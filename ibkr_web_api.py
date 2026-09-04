@@ -32,12 +32,25 @@ from __future__ import annotations
 import logging
 import time
 import random
+import threading
 import requests
 from datetime import datetime
 
 logger = logging.getLogger("ibkr_web_api")
 
 BASE_URL = "https://127.0.0.1:5000/v1/api"
+
+# NIEUW (4 sep 2026, op verzoek: netwerkverkeer reguleren): begrenst
+# het aantal ECHT GELIJKTIJDIGE aanvragen naar het history-eindpunt,
+# ONGEACHT hoeveel symbolen main.py's Semaphore(5) toestaat -- elk
+# symbool doet namelijk 2 losse aanvragen (dagcandles + 15-min-
+# candles), dus 5 gelijktijdige symbolen konden tot 10 gelijktijdige
+# HTTP-aanvragen opleveren, wat de daadwerkelijke, live geconstateerde
+# oorzaak was van de aanhoudende 429-fouten. Dit is een
+# threading.Semaphore (NIET asyncio.Semaphore) omdat de aanroepen via
+# asyncio.to_thread() in echte OS-threads lopen, niet in de
+# event loop zelf.
+_HISTORY_REQUEST_THROTTLE = threading.Semaphore(2)
 
 # Cache van symbool -> conid, zodat we niet bij elke aanroep opnieuw
 # hoeven te zoeken. Simpele in-memory dict, geldig voor de duur van
@@ -226,11 +239,15 @@ def get_historical_bars(conid: int, period: str = "5d", bar: str = "15min", max_
 
     for poging in range(1, max_retries + 1):
         try:
-            response = session.get(
-                f"{BASE_URL}/iserver/marketdata/history",
-                params={"conid": conid, "period": period, "bar": bar},
-                timeout=20,
-            )
+            # NIEUW (4 sep 2026): begrenst echte gelijktijdigheid naar
+            # het history-eindpunt tot 2, ongeacht hoeveel symbool-
+            # processen main.py's Semaphore(5) toestaat.
+            with _HISTORY_REQUEST_THROTTLE:
+                response = session.get(
+                    f"{BASE_URL}/iserver/marketdata/history",
+                    params={"conid": conid, "period": period, "bar": bar},
+                    timeout=20,
+                )
             response.raise_for_status()
             data = response.json()
             bars = data.get("data", [])
