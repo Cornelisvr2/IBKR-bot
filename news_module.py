@@ -43,11 +43,18 @@ FALLBACK_WATCHLIST = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD",
     "NFLX", "CRM", "ADBE", "AVGO", "ORCL", "CSCO", "INTC", "QCOM",
     # Grote financials (zwaar institutioneel gehandeld)
-    "JPM", "BAC", "GS", "V", "MA",
+    # NIEUW (4 sep 2026): MA en V verwijderd -- de 3 minst-bewegende
+    # aandelen van de hele watchlist over de afgelopen week (gemeten
+    # als gemiddelde dagelijkse high-low-range t.o.v. de prijs, via
+    # analyse_beweging.py): MA (1,39%/dag), V (1,47%/dag), CVX
+    # (1,53%/dag) -- een duidelijk gat met de rest van de lijst (CSCO
+    # als volgende laagste zat al op 1,65%). Minder kans op een
+    # geldige manipulatie-candle, dus vooral onnodige API-belasting.
+    "JPM", "BAC", "GS",
     # Hoge volatiliteit, veel retail+institutioneel volume
     "COIN", "PLTR", "MSTR",
-    # Energie (andere sector-correlatie)
-    "XOM", "CVX",
+    # Energie (andere sector-correlatie) -- CVX verwijderd, zie hierboven
+    "XOM",
 ]
 
 
