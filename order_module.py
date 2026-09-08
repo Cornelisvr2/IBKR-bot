@@ -556,7 +556,7 @@ def report_trade_outcome(spec: BracketOrderSpec, symbol: str, outcome: dict, ent
     # Positie uit de open-positielijst verwijderen -- de trade is nu afgerond.
     try:
         from state_module import remove_position
-        remove_position(symbol)
+        remove_position(symbol, oca_group=spec.oca_group)
     except Exception as e:
         logger.error(f"Kon positie niet verwijderen uit state voor {symbol}: {e}")
 
@@ -631,6 +631,7 @@ def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_min
         add_position({
             "symbol": symbol, "direction": direction,
             "entry_price": spec.entry_price, "quantity": spec.quantity,
+            "oca_group": spec.oca_group,
         })
     except Exception as e:
         logger.error(f"Kon positie niet registreren in state voor {symbol}: {e}")
@@ -768,7 +769,7 @@ def force_close_position(spec: BracketOrderSpec, symbol: str, conid: int, accoun
 
     try:
         from state_module import remove_position
-        remove_position(symbol)
+        remove_position(symbol, oca_group=spec.oca_group)
     except Exception as e:
         logger.error(f"Kon positie niet verwijderen uit state voor {symbol}: {e}")
 
