@@ -108,7 +108,7 @@ def main():
             entry_price=signaal.trigger_price,
             take_profit=take_profit,
             stop_loss=signaal.stop_loss_price,
-            oca_group=f"TT2_{args.symbol}_{args.direction}_{int(signaal.trigger_price*100)}",
+            oca_group=f"QFS_{args.symbol}_{args.direction}_{int(signaal.trigger_price*100)}",
             reason=(
                 f"{args.direction} {args.symbol} @ {signaal.trigger_price:.2f} "
                 f"(patroon: {signaal.pattern_type}), TP {take_profit:.2f} (box-rand), "
