@@ -24,6 +24,47 @@ import os
 logger = logging.getLogger("telegram_notify")
 
 
+def send_telegram_photo(photo_path: str, caption: str = None) -> bool:
+    """
+    Verstuurt een afbeelding (bv. een trade-grafiek uit chart_module.py)
+    naar TELEGRAM_CHAT_ID, met optioneel een bijschrift. Gebruikt
+    Telegram's sendPhoto-eindpunt (multipart file-upload), in
+    tegenstelling tot send_telegram_message()'s eenvoudige JSON-POST.
+
+    Faalt stil met een gelogde waarschuwing bij ontbrekende
+    env-variabelen of een mislukte aanroep -- een mislukte grafiek mag
+    nooit de rest van de trade-afhandeling blokkeren.
+    """
+    import requests
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        logger.warning("TELEGRAM_BOT_TOKEN of TELEGRAM_CHAT_ID ontbreekt -- afbeelding niet verstuurd.")
+        return False
+
+    if not os.path.exists(photo_path):
+        logger.error(f"Kan afbeelding niet versturen -- bestand bestaat niet: {photo_path}")
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+
+    try:
+        with open(photo_path, "rb") as f:
+            files = {"photo": f}
+            data = {"chat_id": chat_id}
+            if caption:
+                data["caption"] = caption
+            response = requests.post(url, data=data, files=files, timeout=20)
+        response.raise_for_status()
+        logger.info(f"Telegram-afbeelding verstuurd: {photo_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Kon Telegram-afbeelding niet versturen: {e}")
+        return False
+
+
 def send_telegram_message(text: str, parse_mode: str = None) -> bool:
     """
     Verstuurt een bericht naar TELEGRAM_CHAT_ID via de bot met
