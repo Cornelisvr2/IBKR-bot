@@ -1,23 +1,27 @@
 """
-execute_trade_standalone.py — Touch & Turn Scalper, Losgekoppelde Trade-uitvoering
+execute_reversal_trade_standalone.py — Quick Flip Scalper, Losgekoppelde
+Bewaking + Trade-uitvoering
 
-Voert execute_managed_trade() uit als LOSGEKOPPELD achtergrondproces --
-opgelost probleem: execute_managed_trade() is blokkerend (kan uren
-duren), waardoor main.py (aangeroepen door cron) anders zelf uren zou
-blijven hangen. Dat zou de volgende cron-slot laten overslaan (de
-flock-vergrendeling in run_cycle.sh voorkomt overlap), waardoor er
-effectief maar één cyclus per dag zou draaien.
+ANALOOG aan execute_trade_standalone.py, maar voor de nieuwe, correcte
+3-stappen-strategie (zie reversal_strategy_module.py). BELANGRIJK
+VERSCHIL: het bestaande script krijgt een AL-COMPLETE order-spec mee
+(entry/TP/SL al bekend, komen uit een synchrone berekening in main.py).
 
-Met dit script: main.py plaatst de entry-order, start dit script als
-losgekoppeld proces (start_new_session=True, overleeft het einde van
-de cron-job), en keert direct terug. Dit script zelf doet de rest:
-wachten op fill, TP/SL plaatsen, bewaken, rapporteren -- volledig
-onafhankelijk van de cron-job die het startte.
+Bij de nieuwe strategie is dat NIET mogelijk -- entry/TP/SL zijn pas
+bekend NADAT stap 3 (het wachten op een bevestigd omkeerpatroon, tot
+75 minuten) is voltooid. Dit script krijgt daarom alleen de box-
+gegevens (high/low) en de verwachte richting mee, en voert ZELF de
+volledige stap 3 + trade-uitvoering uit, als losgekoppeld
+achtergrondproces (start_new_session=True, overleeft het einde van de
+cron-job die dit script start) -- exact dezelfde reden als het
+bestaande execute_trade_standalone.py: voorkomt dat de cron-job (en
+daarmee de flock-vergrendeling in run_cycle.sh) tot 75 minuten
+geblokkeerd blijft.
 
 Gebruik (aangeroepen door main.py, niet handmatig):
-    python3 execute_trade_standalone.py --symbol AAPL --action SELL \
-        --quantity 9 --entry-price 316.50 --take-profit 310.00 \
-        --stop-loss 320.00 --oca-group TTS_AAPL_SHORT_31650
+    python3 execute_reversal_trade_standalone.py --symbol AAPL \
+        --box-high 320.50 --box-low 316.20 --direction SHORT \
+        --capital 1980.00
 """
 
 from __future__ import annotations
@@ -26,50 +30,163 @@ import argparse
 import logging
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s|%(levelname)-.1s| %(message)s",
-    filename=f"/opt/strategy/logs/trade_{os.getpid()}.log",
+    filename=f"/opt/strategy/logs/reversal_trade_{os.getpid()}.log",
 )
-logger = logging.getLogger("execute_trade_standalone")
+logger = logging.getLogger("execute_reversal_trade_standalone")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbol", required=True)
-    parser.add_argument("--action", required=True, choices=["BUY", "SELL"])
-    parser.add_argument("--quantity", required=True, type=float)
-    parser.add_argument("--entry-price", required=True, type=float)
-    parser.add_argument("--take-profit", required=True, type=float)
-    parser.add_argument("--stop-loss", required=True, type=float)
-    parser.add_argument("--oca-group", required=True)
+    parser.add_argument("--box-high", required=True, type=float)
+    parser.add_argument("--box-low", required=True, type=float)
+    parser.add_argument("--direction", required=True, choices=["LONG", "SHORT"])
+    parser.add_argument("--capital", required=True, type=float)
     args = parser.parse_args()
 
-    from order_module import BracketOrderSpec, execute_managed_trade
-
-    spec = BracketOrderSpec(
-        action=args.action,
-        quantity=args.quantity,
-        entry_price=args.entry_price,
-        take_profit=args.take_profit,
-        stop_loss=args.stop_loss,
-        oca_group=args.oca_group,
-        reason=f"{args.action} {args.quantity}x {args.symbol} @ {args.entry_price:.4f} (losgekoppeld proces)",
+    logger.info(
+        f"Losgekoppeld reversal-bewakingsproces gestart voor {args.symbol}, PID {os.getpid()} "
+        f"(box=[{args.box_low:.2f}, {args.box_high:.2f}], richting={args.direction})"
     )
 
-    logger.info(f"Losgekoppeld trade-proces gestart voor {args.symbol}, PID {os.getpid()}")
+    from reversal_monitor_module import wait_for_reversal_signal
+    from data_module import get_historical_candles
+    from reversal_strategy_module import calculate_reversal_position_size
+    from order_module import BracketOrderSpec, FORCED_CLOSE_TIME, execute_managed_trade
 
     try:
-        result = execute_managed_trade(spec, args.symbol)
+        signaal = wait_for_reversal_signal(
+            args.symbol, box_high=args.box_high, box_low=args.box_low,
+            expected_direction=args.direction, deadline=FORCED_CLOSE_TIME,
+        )
+
+        if signaal is None:
+            logger.info(f"{args.symbol}: geen bevestigd omkeerpatroon binnen de tijdslimiet -- geen trade vandaag.")
+            try:
+                from telegram_notify import send_telegram_message
+                send_telegram_message(
+                    f"ℹ️ {args.symbol}: geen bevestigd omkeerpatroon binnen 90 minuten -- geen trade vandaag."
+                )
+            except Exception:
+                pass
+            return
+
+        take_profit = args.box_low if args.direction == "SHORT" else args.box_high
+
+        try:
+            position_size, risk_amount, capped = calculate_reversal_position_size(
+                entry_price=signaal.trigger_price, stop_loss=signaal.stop_loss_price,
+                capital=args.capital, direction=args.direction,
+            )
+        except ValueError as e:
+            # NIEUW (1 sep 2026, bugfix): dit is een VERWACHT, legitiem
+            # "sla deze trade over"-scenario (bv. de entry lag door een
+            # koerssprong aan de verkeerde kant van de SL) -- geen
+            # kritieke systeemfout, dus GEEN alarmerende foutmelding,
+            # alleen een informatieve.
+            logger.warning(f"{args.symbol}: trade overgeslagen -- {e}")
+            try:
+                from telegram_notify import send_telegram_message
+                send_telegram_message(f"ℹ️ {args.symbol}: trade overgeslagen -- {e}")
+            except Exception:
+                pass
+            return
+
+        if position_size * signaal.trigger_price < 5.0:
+            logger.warning(f"{args.symbol}: positiewaarde te klein met €{args.capital:.2f} kapitaal -- geen trade.")
+            return
+
+        spec = BracketOrderSpec(
+            action="BUY" if args.direction == "LONG" else "SELL",
+            quantity=position_size,
+            entry_price=signaal.trigger_price,
+            take_profit=take_profit,
+            stop_loss=signaal.stop_loss_price,
+            oca_group=f"TT2_{args.symbol}_{args.direction}_{int(signaal.trigger_price*100)}",
+            reason=(
+                f"{args.direction} {args.symbol} @ {signaal.trigger_price:.2f} "
+                f"(patroon: {signaal.pattern_type}), TP {take_profit:.2f} (box-rand), "
+                f"SL {signaal.stop_loss_price:.2f} (structuur), risico €{risk_amount:.2f}"
+                + (" [GELIMITEERD door max-positiewaarde]" if capped else "")
+            ),
+        )
+
+        logger.info(f"Omkeerpatroon bevestigd voor {args.symbol}: {spec.reason} -- trade wordt nu geplaatst.")
+
+        # NIEUW (3 sep 2026, bugfix): bereken de RESTERENDE tijd tot de
+        # 90-minuten-strategiedeadline (FORCED_CLOSE_TIME), en geef die
+        # mee als bovengrens voor de entry-fill-wachttijd -- voorkomt
+        # dat een laat-gevonden signaal (bv. vlak vóór 17:00) via de
+        # eigen, losstaande 75-minuten-fill-timeout alsnog ver NA de
+        # deadline kan vullen (live gebeurd bij META, 3 sep 2026: fill
+        # om 17:14, 14 minuten na de bedoelde afkap). Een kleine,
+        # positieve ondergrens (1 minuut) voorkomt een direct-annuleren
+        # bij een deadline die al zeer dichtbij is.
+        nu = datetime.now()
+        deadline_vandaag = nu.replace(
+            hour=FORCED_CLOSE_TIME.hour, minute=FORCED_CLOSE_TIME.minute,
+            second=FORCED_CLOSE_TIME.second, microsecond=0,
+        )
+        resterende_minuten = max(1.0, (deadline_vandaag - nu).total_seconds() / 60)
+        logger.info(f"{args.symbol}: nog {resterende_minuten:.1f} minuten tot de deadline -- fill-wachttijd hierop begrensd.")
+
+        result = execute_managed_trade(spec, args.symbol, max_fill_wait_minutes=resterende_minuten)
         logger.info(f"Trade afgerond: {result}")
+
+        # NIEUW (8 sep 2026, op verzoek): stuur na afloop van een
+        # AFGERONDE trade (TP/SL/geforceerd gesloten) een grafiek naar
+        # Telegram met het koersverloop en de entry/TP/SL/box-niveaus
+        # erop -- geeft direct visueel inzicht of de niveaus goed
+        # gekozen waren en hoe de koers zich daarna ontwikkelde. Een
+        # mislukte grafiek mag de rest van de afhandeling nooit
+        # blokkeren (vandaar de brede try/except eromheen).
+        if result.get("status") == "trade_complete":
+            try:
+                from chart_module import genereer_trade_grafiek
+                from telegram_notify import send_telegram_photo
+
+                grafiek_candles = get_historical_candles(args.symbol, duration="1d", bar_size="5min")
+                vandaag_grafiek_candles = [
+                    c for c in grafiek_candles if c.timestamp.date() == datetime.now().date()
+                ]
+
+                trade_resultaat = result.get("result", "onbekend")
+                # Exit-prijs is niet altijd rechtstreeks beschikbaar in
+                # `result` -- bij TP/SL-hit is de bedoelde prijs zelf
+                # een goede, visueel bruikbare benadering; bij een
+                # geforceerde sluiting laten we de exit-marker weg (dan
+                # toont de grafiek gewoon de laatste bekende candle).
+                benaderde_exit_prijs = None
+                if trade_resultaat == "take_profit_hit":
+                    benaderde_exit_prijs = take_profit
+                elif trade_resultaat == "stop_loss_hit":
+                    benaderde_exit_prijs = signaal.stop_loss_price
+
+                grafiek_pad = genereer_trade_grafiek(
+                    symbol=args.symbol, candles=vandaag_grafiek_candles,
+                    box_high=args.box_high, box_low=args.box_low,
+                    entry_price=signaal.trigger_price, take_profit=take_profit,
+                    stop_loss=signaal.stop_loss_price, exit_price=benaderde_exit_prijs,
+                    direction=args.direction, result=trade_resultaat,
+                )
+                if grafiek_pad:
+                    bijschrift = f"{args.symbol} {args.direction} -- {trade_resultaat}"
+                    send_telegram_photo(grafiek_pad, caption=bijschrift)
+            except Exception as e:
+                logger.error(f"{args.symbol}: kon trade-grafiek niet genereren/versturen (niet kritiek): {e}")
+
     except Exception as e:
-        logger.error(f"Onverwachte fout in losgekoppeld trade-proces voor {args.symbol}: {e}")
+        logger.error(f"Onverwachte fout in losgekoppeld reversal-proces voor {args.symbol}: {e}")
         try:
             from telegram_notify import send_telegram_message
-            send_telegram_message(f"⚠️ Onverwachte fout in trade-proces voor {args.symbol}: {e}")
+            send_telegram_message(f"⚠️ Onverwachte fout in reversal-trade-proces voor {args.symbol}: {e}")
         except Exception:
             pass
 
