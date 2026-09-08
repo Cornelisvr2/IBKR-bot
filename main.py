@@ -44,6 +44,7 @@ from atr_module import calculate_atr, validate_opening_range
 from entry_module import generate_entry_signal
 from exit_module import calculate_exit_levels
 from order_module import build_bracket_orders
+from reversal_strategy_module import run_reversal_symbol_cycle
 
 logger = logging.getLogger("main")
 
@@ -275,6 +276,21 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
         logger.error(reason)
         return {"status": "skipped", "reason": reason}
 
+    # NIEUW (9 sep 2026, op verzoek): BEIDE strategieën tegelijk laten
+    # draaien op ALLE gekozen aandelen, om ze onderling te kunnen
+    # vergelijken -- de Fibonacci-flow (run_symbol_cycle, OCA-prefix
+    # "TTS_") en de bevestigingsflow (run_reversal_symbol_cycle,
+    # OCA-prefix "TT2_") zijn al los van elkaar herkenbaar in de
+    # journal, dus geen aanpassing nodig aan de CSV-structuur zelf om
+    # ze achteraf te kunnen scheiden. Bewust GEEN limiet en GEEN
+    # opsplitsing van de watchlist (op uitdrukkelijk verzoek) -- meer
+    # berichten en eventuele fouten spotten weegt zwaarder dan minder
+    # netwerkverkeer.
+    taken_lijst = []
+    for symbool, reden in chosen:
+        taken_lijst.append((symbool, reden, "TTS"))
+        taken_lijst.append((symbool, reden, "QFS"))
+
     # NIEUW (2 sep 2026, bugfix): bij de volledige-watchlist-scan (26
     # symbolen) veroorzaakte het gelijktijdig starten van ALLE taken
     # (asyncio.gather zonder limiet) 429-fouten ("Too Many Requests")
@@ -285,7 +301,7 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     # in de rij, net zo lang tot er weer ruimte is.
     semafoor = asyncio.Semaphore(5)
 
-    async def _run_symbol_async(symbol: str, news_reason: str):
+    async def _run_symbol_async(symbol: str, news_reason: str, strategie: str):
         async with semafoor:
             # NIEUW (2 sep 2026, aanvullende bugfix): een kleine,
             # willekeurige opstartvertraging (0-3s) VOORDAT dit symbool
@@ -296,15 +312,20 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
             # veroorzaakte, zelfs met de latere jitter op de
             # retry-wachttijd in ibkr_web_api.py.
             await asyncio.sleep(random.uniform(0, 3))
-            logger.info(f"--- Symbool: {symbol} ({news_reason}) ---")
+            logger.info(f"--- Symbool: {symbol} ({news_reason}) [{strategie}] ---")
             try:
-                return await asyncio.to_thread(run_symbol_cycle, symbol, allocated_capital, dry_run)
+                if strategie == "TTS":
+                    resultaat = await asyncio.to_thread(run_symbol_cycle, symbol, allocated_capital, dry_run)
+                else:
+                    resultaat = await asyncio.to_thread(run_reversal_symbol_cycle, symbol, allocated_capital, dry_run)
+                resultaat["strategie"] = strategie
+                return resultaat
             except Exception as e:
-                logger.error(f"Onverwachte fout bij {symbol}: {e}")
-                return {"status": "error", "symbol": symbol, "reason": str(e)}
+                logger.error(f"Onverwachte fout bij {symbol} ({strategie}): {e}")
+                return {"status": "error", "symbol": symbol, "strategie": strategie, "reason": str(e)}
 
     async def _run_all_symbols():
-        tasks = [_run_symbol_async(symbol, news_reason) for symbol, news_reason in chosen]
+        tasks = [_run_symbol_async(symbool, reden, strategie) for symbool, reden, strategie in taken_lijst]
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     # asyncio.run() start een nieuwe event loop -- werkt voor de
@@ -316,10 +337,10 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     raw_results = asyncio.run(_run_all_symbols())
 
     results = []
-    for (symbol, _), r in zip(chosen, raw_results):
+    for (symbool, _, strategie), r in zip(taken_lijst, raw_results):
         if isinstance(r, Exception):
-            logger.error(f"Onafgevangen fout bij {symbol}: {r}")
-            results.append({"status": "error", "symbol": symbol, "reason": str(r)})
+            logger.error(f"Onafgevangen fout bij {symbool} ({strategie}): {r}")
+            results.append({"status": "error", "symbol": symbool, "strategie": strategie, "reason": str(r)})
         else:
             results.append(r)
 
@@ -330,7 +351,7 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     # succesvol gedispatcht was. "trade_dispatched" blijft staan voor
     # de OUDE (Fibonacci-gebaseerde) flow in run_symbol_cycle().
     executed = [r for r in results if r["status"] in ("dry_run_complete", "trade_complete", "trade_dispatched", "dispatched")]
-    logger.info(f"=== Cyclus afgerond: {len(executed)}/{len(chosen)} trades uitgevoerd ===")
+    logger.info(f"=== Cyclus afgerond: {len(executed)}/{len(taken_lijst)} trades uitgevoerd (TTS + QFS samen) ===")
 
     # NIEUW (3 sep 2026, op verzoek): één samenvattend Telegram-bericht
     # met ALLE vandaag gekwalificeerde aandelen (manipulatie-candle
@@ -340,14 +361,26 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     # i.p.v. live bijgewerkt (de ATR-checks lopen dankzij de Semaphore
     # + jitter toch niet allemaal exact gelijktijdig, maar zijn na een
     # paar minuten altijd wel allemaal afgerond).
+    # NIEUW (3 sep 2026, op verzoek; uitgebreid 9 sep 2026 voor de
+    # A/B-vergelijking TTS vs QFS): één samenvattend Telegram-bericht
+    # met ALLE vandaag gekwalificeerde aandelen, PER STRATEGIE apart
+    # weergegeven -- bewust niet per aandeel apart (zou bij 20+
+    # kandidaten x 2 strategieën te veel ruis geven), en bewust NA
+    # afloop i.p.v. live bijgewerkt.
     if not dry_run and executed:
-        gedispatchte = [r for r in results if r["status"] == "dispatched"]
-        if gedispatchte:
-            regels = [f"• {r['symbol']} ({r.get('direction', '?')})" for r in gedispatchte]
-            samenvatting = (
-                f"🔍 {len(gedispatchte)} aandelen gekwalificeerd vandaag (manipulatie-candle bevestigd, "
-                f"bewaking gestart tot 17:00):\n" + "\n".join(regels)
-            )
+        qfs_gedispatcht = [r for r in results if r["status"] == "dispatched"]
+        tts_gedispatcht = [r for r in results if r["status"] == "trade_dispatched"]
+
+        if qfs_gedispatcht or tts_gedispatcht:
+            secties = []
+            if tts_gedispatcht:
+                regels = [f"• {r['symbol']} ({r.get('action', r.get('direction', '?'))})" for r in tts_gedispatcht]
+                secties.append(f"TTS (Touch & Turn, {len(tts_gedispatcht)}x):\n" + "\n".join(regels))
+            if qfs_gedispatcht:
+                regels = [f"• {r['symbol']} ({r.get('direction', '?')})" for r in qfs_gedispatcht]
+                secties.append(f"QFS (Quick Flip, {len(qfs_gedispatcht)}x, bewaking tot 17:00):\n" + "\n".join(regels))
+
+            samenvatting = "🔍 Vandaag gekwalificeerd:\n\n" + "\n\n".join(secties)
             try:
                 from telegram_notify import send_telegram_message
                 send_telegram_message(samenvatting)
