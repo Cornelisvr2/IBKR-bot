@@ -44,7 +44,6 @@ from atr_module import calculate_atr, validate_opening_range
 from entry_module import generate_entry_signal
 from exit_module import calculate_exit_levels
 from order_module import build_bracket_orders
-from reversal_strategy_module import run_reversal_symbol_cycle
 
 logger = logging.getLogger("main")
 
@@ -127,6 +126,19 @@ def run_symbol_cycle(symbol: str, capital: float, dry_run: bool) -> dict:
     # in data_module.py.
     if opening_candle is None:
         reason = f"Geen openingscandle van vandaag beschikbaar voor {symbol} -- cyclus overgeslagen."
+        logger.warning(reason)
+        return {"status": "skipped", "symbol": symbol, "reason": reason}
+
+    # NIEUW (9 sep 2026, dezelfde bugfix als eerder toegepast op de
+    # (inmiddels weer verlaten) reversal-flow): de openingscandle-check
+    # hierboven ving ALLEEN een mislukte 15-MINUTEN-fetch op -- de
+    # DAG-candles (nodig voor ATR) hebben hun EIGEN, aparte aanvraag en
+    # dus ook hun eigen kans om te mislukken (bv. bij 429-rate-limiet-
+    # druk bij de volledige-watchlist-scan). Zonder deze check kon
+    # calculate_atr() een lege lijst krijgen en een onopgevangen fout
+    # gooien.
+    if not daily_candles or len(daily_candles) < 15:
+        reason = f"Onvoldoende dagcandles voor {symbol} ({len(daily_candles)} beschikbaar) -- cyclus overgeslagen."
         logger.warning(reason)
         return {"status": "skipped", "symbol": symbol, "reason": reason}
 
@@ -286,7 +298,7 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
             await asyncio.sleep(random.uniform(0, 3))
             logger.info(f"--- Symbool: {symbol} ({news_reason}) ---")
             try:
-                return await asyncio.to_thread(run_reversal_symbol_cycle, symbol, allocated_capital, dry_run)
+                return await asyncio.to_thread(run_symbol_cycle, symbol, allocated_capital, dry_run)
             except Exception as e:
                 logger.error(f"Onverwachte fout bij {symbol}: {e}")
                 return {"status": "error", "symbol": symbol, "reason": str(e)}
