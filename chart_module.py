@@ -43,6 +43,7 @@ def genereer_trade_grafiek(
     exit_price: float | None,
     direction: str,
     result: str,
+    entry_time=None,
 ) -> str | None:
     """
     Bouwt een lijngrafiek (close-prijzen van de meegegeven candles) met
@@ -60,6 +61,16 @@ def genereer_trade_grafiek(
         direction: "LONG" of "SHORT" -- bepaalt de kleur/interpretatie.
         result: bv. "take_profit_hit", "stop_loss_hit",
                 "forced_close_90min" -- gebruikt voor de titel/kleur.
+        entry_time: NIEUW (8 sep 2026, bugfix op verzoek) -- het exacte
+                    tijdstip van instappen. Zonder dit werd entry_price
+                    alleen als een VLAKKE LIJN over de hele dag getoond
+                    -- daardoor was nergens te zien OP WELK MOMENT de
+                    daadwerkelijke entry plaatsvond, wat het onmogelijk
+                    maakte om visueel te beoordelen of de entry
+                    daadwerkelijk samenviel met een herkenbaar
+                    omkeerpatroon. Optioneel (None) voor
+                    achterwaartse compatibiliteit -- dan wordt alleen
+                    de vlakke lijn getoond, zoals voorheen.
     """
     try:
         os.makedirs(CHART_OUTPUT_DIR, exist_ok=True)
@@ -81,8 +92,17 @@ def genereer_trade_grafiek(
         ax.axhline(box_low, color="#888888", linestyle=":", linewidth=1, label=f"Box low ({box_low:.2f})")
         ax.axhspan(box_low, box_high, color="#888888", alpha=0.08)
 
-        # Entry
+        # Entry -- vlakke referentielijn (blijft, handig om het niveau
+        # door de hele dag te kunnen volgen)
         ax.axhline(entry_price, color="#ffd166", linestyle="-", linewidth=1.5, label=f"Entry ({entry_price:.2f})")
+
+        # NIEUW: apart, duidelijk zichtbaar markeringspunt OP het
+        # exacte instapmoment, indien bekend -- dit is het daadwerkelijke
+        # antwoord op "waar precies stapten we in", i.p.v. alleen het
+        # prijsniveau over de hele dag.
+        if entry_time is not None:
+            ax.scatter([entry_time], [entry_price], color="#ffd166", s=140, zorder=6,
+                       marker="^", edgecolors="black", linewidths=1, label=f"Entry-moment ({entry_time.strftime('%H:%M')})")
 
         # Take-profit en stop-loss
         tp_kleur = "#06d6a0"
@@ -162,6 +182,7 @@ if __name__ == "__main__":
         entry_price=259.50, take_profit=264.00, stop_loss=257.00,
         exit_price=testcandles[-1].close,
         direction="SHORT", result="take_profit_hit",
+        entry_time=testcandles[5].timestamp,
     )
     print(f"Grafiek gegenereerd: {pad}")
     print(f"Bestand bestaat: {os.path.exists(pad) if pad else False}")
