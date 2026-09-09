@@ -719,7 +719,7 @@ def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_min
     if exit_result["tp_order_id"] is None:
         _notify_safe(f"⚠️ {symbol}: TP-order mislukt, alleen SL actief (order {exit_result['sl_order_id']}). Controleer handmatig of een TP alsnog gewenst is.")
     elif exit_result["sl_order_id"] is None:
-        _notify_safe(f"⚠️ {symbol}: SL-order mislukt, alleen TP actief (order {exit_result['tp_order_id']}). URGENT: positie heeft geen stop-loss, controleer handmatig.")
+        _notify_safe(f"🚨 {symbol}: SL-order mislukt, alleen TP actief (order {exit_result['tp_order_id']}). URGENT: positie heeft geen stop-loss, controleer handmatig.")
 
     outcome = monitor_oco_exit(exit_result["tp_order_id"], exit_result["sl_order_id"], account_id,
                                forced_close_time=forced_close_time)

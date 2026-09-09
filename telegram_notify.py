@@ -65,25 +65,86 @@ def send_telegram_photo(photo_path: str, caption: str = None) -> bool:
         return False
 
 
-def send_telegram_message(text: str, parse_mode: str = None) -> bool:
+# ---------------------------------------------------------------------------
+# NIEUW (9 sep 2026, op verzoek): meldingen ROUTEREN i.p.v. alles naar
+# Telegram. Sinds TTS+QFS+RVB samen draaien is de stroom te groot.
+#
+#   URGENT   -> Telegram + gebeurtenissenlog   (🚨 en ❌: onbeschermde
+#               positie, sessie-herstel mislukt, order plaatsen mislukt)
+#   WARNING  -> alleen gebeurtenissenlog        (⚠️)
+#   INFO     -> alleen gebeurtenissenlog        (al het overige: order
+#               geplaatst, entry gevuld, TP/SL geraakt, dry-run-signalen)
+#
+# De gebeurtenissenlog (logs/events.jsonl) wordt per dag getoond op het
+# dashboard. Bestaande aanroepen hoeven niet aangepast: het niveau volgt
+# uit de emoji waarmee elk bericht al begint. Wil je een bericht tóch
+# altijd op Telegram (bv. het dagrapport), geef dan urgent=True mee.
+#
+# Omgevingsvariabele TELEGRAM_LEVEL:
+#   urgent  (standaard) -> alleen 🚨/❌ naar Telegram
+#   warning             -> ook ⚠️
+#   all                 -> oud gedrag, alles naar Telegram
+# ---------------------------------------------------------------------------
+
+EVENT_LOG_PATH = os.environ.get("EVENT_LOG_FILE", "/opt/strategy/logs/events.jsonl")
+_URGENT_PREFIXES = ("🚨", "❌")
+_WARNING_PREFIXES = ("⚠️", "⚠")
+
+
+def classify_level(text: str) -> str:
+    t = text.lstrip()
+    if t.startswith(_URGENT_PREFIXES):
+        return "urgent"
+    if t.startswith(_WARNING_PREFIXES):
+        return "warning"
+    return "info"
+
+
+def log_event(level: str, text: str, sent_to_telegram: bool = False) -> None:
+    """Schrijft één regel naar logs/events.jsonl -- nooit ge-raised."""
+    import json
+    from datetime import datetime
+    try:
+        os.makedirs(os.path.dirname(EVENT_LOG_PATH), exist_ok=True)
+        with open(EVENT_LOG_PATH, "a") as f:
+            f.write(json.dumps({
+                "time": datetime.now().isoformat(timespec="seconds"),
+                "level": level, "text": text, "telegram": sent_to_telegram,
+            }, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error(f"Kon gebeurtenis niet loggen: {e}")
+
+
+def send_telegram_message(text: str, parse_mode: str = None, urgent: bool = False) -> bool:
     """
-    Verstuurt een bericht naar TELEGRAM_CHAT_ID via de bot met
-    TELEGRAM_BOT_TOKEN. Faalt stil met een gelogde waarschuwing als
-    de vereiste omgevingsvariabelen ontbreken of de aanroep mislukt --
-    een ontbrekende melding mag nooit de rest van een cyclus laten
-    crashen.
-
-    LET OP: vereist een live internetverbinding -- niet end-to-end
-    getest in de sandbox waarin dit gebouwd is (geen internettoegang
-    daar). Test dit als eerste, apart, op de VPS.
-
-    Args:
-        text: berichttekst
-        parse_mode: optioneel "Markdown" of "HTML" voor opmaak
+    Routeert een melding: logt hem ALTIJD in de gebeurtenissenlog en
+    verstuurt hem alleen naar Telegram als het niveau dat rechtvaardigt
+    (zie toelichting hierboven). Faalt stil met een gelogde
+    waarschuwing als Telegram niet bereikbaar is.
 
     Returns:
-        True bij (waarschijnlijk) succes, False bij een bekende fout.
+        True als de melding naar Telegram is verstuurd, anders False
+        (dus ook False als hij bewust alleen gelogd is).
     """
+    level = "urgent" if urgent else classify_level(text)
+    drempel = os.environ.get("TELEGRAM_LEVEL", "urgent").lower()
+    naar_telegram = (
+        level == "urgent"
+        or (drempel == "warning" and level == "warning")
+        or drempel == "all"
+    )
+    if not naar_telegram:
+        log_event(level, text, sent_to_telegram=False)
+        logger.info(f"Melding ({level}) alleen gelogd, niet naar Telegram: {text[:80]}")
+        return False
+
+    verstuurd = _send_raw(text, parse_mode)
+    log_event(level, text, sent_to_telegram=verstuurd)
+    return verstuurd
+
+
+def _send_raw(text: str, parse_mode: str = None) -> bool:
+    """De daadwerkelijke Telegram-aanroep (oude send_telegram_message)."""
     import requests
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")

@@ -47,7 +47,7 @@ def send_daily_vix_report(total_capital: float = 2000.0) -> dict:
             "Beide strategieën passen hun eigen veilige-fallback toe "
             "(geen trades bij onbekende VIX)."
         )
-        send_telegram_message(message)
+        send_telegram_message(urgent=True, text=message)
         logger.warning("VIX onbekend -- rapport verstuurd met waarschuwing.")
         return {"vix": None}
 
@@ -71,7 +71,7 @@ def send_daily_vix_report(total_capital: float = 2000.0) -> dict:
         f"VIX Rider: {allocation['macro_panic_pct']*100:.0f}% "
         f"(€{vix_rider_capital:,.2f})"
     )
-    send_telegram_message(message)
+    send_telegram_message(urgent=True, text=message)
     logger.info(f"Dagelijks VIX-rapport verstuurd: VIX={vix:.2f}, {besluit}")
 
     return {"vix": vix, **allocation}

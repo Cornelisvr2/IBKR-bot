@@ -47,6 +47,7 @@ JOURNAL_PATH = os.environ.get("TTS_JOURNAL_FILE", os.path.join(LOGS_DIR, "trade_
 CHARTS_DIR = os.path.join(LOGS_DIR, "charts")
 SIGNALS_PATH = os.environ.get("RVB_SIGNAL_LOG", os.path.join(LOGS_DIR, "rvb_signals.jsonl"))
 STATE_PATH = os.environ.get("TTS_STATE_FILE", os.path.join(STRATEGY_DIR, "state.json"))
+EVENTS_PATH = os.environ.get("EVENT_LOG_FILE", os.path.join(LOGS_DIR, "events.jsonl"))
 HOST = os.environ.get("DASHBOARD_BIND", "127.0.0.1")   # 0.0.0.0 alleen in de Docker-Caddy-situatie, zie DASHBOARD_DEPLOY.md
 PORT = int(os.environ.get("DASHBOARD_PORT", "8899"))
 
@@ -133,6 +134,22 @@ def load_signals(day: str) -> list[dict]:
     return out
 
 
+def load_events(day: str) -> list[dict]:
+    """Meldingen van één dag uit events.jsonl (telegram_notify.log_event)."""
+    if not os.path.exists(EVENTS_PATH):
+        return []
+    out = []
+    with open(EVENTS_PATH) as f:
+        for line in f:
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("time", "").startswith(day):
+                out.append(ev)
+    return out
+
+
 def load_balance() -> float | None:
     try:
         with open(STATE_PATH) as f:
@@ -173,6 +190,7 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
         }
 
     signals = load_signals(iso)
+    events = load_events(iso)
     dates = sorted({t["date"] for t in all_trades})
     prev_days = [d for d in dates if d < iso]
     next_days = [d for d in dates if d > iso]
@@ -181,6 +199,8 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
         "total": summarize(day_trades), "week": summarize(week_trades),
         "per_strategy": per_strategy, "balance": load_balance(),
         "signals_skipped": [s for s in signals if s.get("status") == "skipped"],
+        "events": events,
+        "event_counts": {lvl: sum(1 for e in events if e.get("level") == lvl) for lvl in ("urgent", "warning", "info")},
         "prev_date": prev_days[-1] if prev_days else None, "next_date": next_days[0] if next_days else None,
         "generated_at": datetime.now().strftime("%H:%M"),
     }
@@ -210,8 +230,12 @@ header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
 .detail{display:grid;grid-template-columns:1fr 260px;gap:18px;padding:4px 14px 16px 20px;border-top:1px solid var(--rule)}.detail figure{margin:0}.detail img{width:100%;height:auto;border:1px solid var(--rule);border-radius:6px;background:#fbfcfd}.detail .nochart{border:1px dashed var(--rule);border-radius:6px;padding:40px;text-align:center;color:var(--ink-3);font-size:13px}.detail dl{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;font-size:13px;margin:8px 0 0}.detail dt{color:var(--ink-3)}.detail dd{margin:0}.detail .note{font-size:13px;color:var(--ink-2);margin-top:12px;padding-top:10px;border-top:1px solid var(--rule)}
 .empty{background:var(--sheet);border:1px dashed var(--rule);border-radius:10px;padding:26px;color:var(--ink-3);text-align:center}
 .signals{margin-top:26px;font-size:13px;color:var(--ink-2)}.signals h2{font-size:14px;font-weight:600;margin:0 0 6px;color:var(--ink-2)}.signals ul{margin:0;padding-left:18px}
+.events{margin-top:26px}.events h2{font-size:16px;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline}.events .counts{font-size:12px;color:var(--ink-3);font-weight:400}
+.events ol{list-style:none;margin:0;padding:0;background:var(--sheet);border:1px solid var(--rule);border-radius:10px;overflow:hidden}.events li{display:grid;grid-template-columns:52px 74px 1fr 70px;gap:12px;padding:8px 14px;border-top:1px solid var(--rule);font-size:13px;align-items:baseline}.events li:first-child{border-top:0}
+.events .lvl{font-weight:600;font-size:12px}.events li.urgent .lvl{color:var(--loss)}.events li.warning .lvl{color:#b7791f}.events li.info .lvl{color:var(--ink-3)}.events li.urgent{background:#fdf3f2}.events .txt{white-space:pre-wrap;color:var(--ink-2)}.events li.urgent .txt{color:var(--ink)}.events .tg{font-size:12px;color:var(--ink-3);text-align:right}
+.events li.info.hidden{display:none}
 .footer{margin-top:30px;font-size:12px;color:var(--ink-3)}
-@media(max-width:720px){.scores{grid-template-columns:1fr}.trade summary{grid-template-columns:8px 46px 40px 56px 1fr 70px 20px}.t-result{display:none}.detail{grid-template-columns:1fr}}
+@media(max-width:720px){.scores{grid-template-columns:1fr}.events li{grid-template-columns:44px 64px 1fr}.events .tg{display:none}.trade summary{grid-template-columns:8px 46px 40px 56px 1fr 70px 20px}.t-result{display:none}.detail{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.chev{transition:none}}
 """
 
@@ -220,6 +244,7 @@ document.querySelectorAll('.filters button').forEach(b=>b.addEventListener('clic
   document.querySelectorAll('.filters button').forEach(x=>x.setAttribute('aria-pressed',x===b));
   const f=b.dataset.f;document.querySelectorAll('.trade').forEach(t=>{t.style.display=(f==='all'||t.classList.contains(f))?'':'none';});
 }));
+const tog=document.getElementById('toggle-info');if(tog){tog.addEventListener('click',()=>{const on=tog.getAttribute('aria-pressed')!=='true';tog.setAttribute('aria-pressed',on);document.querySelectorAll('.events li.info').forEach(l=>l.classList.toggle('hidden',!on));});}
 """
 
 
@@ -316,6 +341,19 @@ def render(d: dict) -> str:
         for s in d["signals_skipped"])
     signals = f'<section class="signals"><h2>RVB-signalen zonder trade ({len(d["signals_skipped"])})</h2><ul>{sig_items}</ul></section>' if sig_items else ""
 
+    LVL = {"urgent": "Urgent", "warning": "Let op", "info": "Info"}
+    order = {"urgent": 0, "warning": 1, "info": 2}
+    evs = sorted(d["events"], key=lambda ev: (order.get(ev.get("level"), 3), ev.get("time", "")))
+    ev_items = "".join(
+        f'<li class="{e(ev.get("level", "info"))}{" hidden" if ev.get("level") == "info" else ""}"><span class="t-time">{e(ev.get("time", "")[11:16])}</span>'
+        f'<span class="lvl">{LVL.get(ev.get("level"), "Info")}</span><span class="txt">{e(ev.get("text", ""))}</span>'
+        f'<span class="tg">{"Telegram" if ev.get("telegram") else ""}</span></li>'
+        for ev in evs)
+    c = d["event_counts"]
+    events_html = (f'<section class="events"><h2>Meldingen <span class="counts">{c["urgent"]} urgent · {c["warning"]} let op · {c["info"]} info</span>'
+                   f'<div class="filters"><button type="button" id="toggle-info" aria-pressed="false">Toon info</button></div></h2><ol>{ev_items}</ol></section>'
+                   if evs else '<section class="events"><h2>Meldingen</h2><div class="empty">Geen meldingen op deze dag.</div></section>')
+
     return f"""<!DOCTYPE html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dagrapport — {e(titel)}</title><style>{CSS}</style></head><body><div class="page">
 <header><h1>{e(titel)}</h1><nav class="daynav" aria-label="Dag kiezen">{nav_prev}{nav_next}</nav></header>
@@ -325,8 +363,8 @@ def render(d: dict) -> str:
 <section class="scores" aria-label="Resultaat per strategie">{''.join(cards)}</section>
 <section class="trades"><h2>Trades van deze dag<div class="filters" role="group" aria-label="Filter op strategie">
 <button type="button" aria-pressed="true" data-f="all">Alle</button><button type="button" aria-pressed="false" data-f="TTS">TTS</button><button type="button" aria-pressed="false" data-f="QFS">QFS</button><button type="button" aria-pressed="false" data-f="RVB">RVB</button></div></h2>
-{trades}</section>{signals}
-<p class="footer">Bron: trade_journal.csv, rvb_signals.jsonl en logs/charts. Pagina gegenereerd {d['generated_at']}.</p>
+{trades}</section>{signals}{events_html}
+<p class="footer">Bron: trade_journal.csv, events.jsonl, rvb_signals.jsonl en logs/charts. Pagina gegenereerd {d['generated_at']}.</p>
 </div><script>{JS}</script></body></html>"""
 
 
