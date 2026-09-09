@@ -66,7 +66,7 @@ def send_daily_vix_report(total_capital: float = 2000.0) -> dict:
     message = (
         f"📊 Dagelijks VIX-rapport\n\n"
         f"VIX: {vix:.2f}\n\n"
-        f"Touch & Turn Scalper: {allocation['scalper_pct']*100:.0f}% "
+        f"Scalpers (TTS + QFS): {allocation['scalper_pct']*100:.0f}% "
         f"(€{scalper_capital:,.2f})\n"
         f"VIX Rider: {allocation['macro_panic_pct']*100:.0f}% "
         f"(€{vix_rider_capital:,.2f})"
