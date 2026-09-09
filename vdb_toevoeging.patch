@@ -1,0 +1,831 @@
+diff --git a/dashboard_server.py b/dashboard_server.py
+index 74b9390..40c566e 100644
+--- a/dashboard_server.py
++++ b/dashboard_server.py
+@@ -1,15 +1,17 @@
+ """
+-dashboard_server.py — Dagrapport-dashboard voor TTS, QFS en RVB
++dashboard_server.py — Dagrapport-dashboard voor TTS, QFS, RVB en VDB
+ 
+-VERVANGT (9 sep 2026) het eerdere TTS-monitordashboard. Toont per dag:
+-tijdlijn van de handelsdag, scorekaarten per strategie, alle trades
+-met grafiek en detail, en de RVB-signalen die géén trade werden.
+-Doel: de Telegram-stroom terugbrengen tot alleen alarmen.
++VERVANGT (9 sep 2026) het eerdere TTS-monitordashboard. UITGEBREID
++(9 sep 2026) met VDB (VWAP Dynamic Bounce) als vierde strategie. Toont
++per dag: tijdlijn van de handelsdag, scorekaarten per strategie, alle
++trades met grafiek en detail, en de RVB/VDB-signalen die géén trade
++werden. Doel: de Telegram-stroom terugbrengen tot alleen alarmen.
+ 
+ Bronnen (alleen lezen):
+     logs/trade_journal.csv      -- afgeronde trades (journal_module.py)
+     logs/charts/*.png           -- grafieken (chart_module.py)
+     logs/rvb_signals.jsonl      -- RVB-signalen incl. overgeslagen (rvb_scan.py)
++    logs/vdb_signals.jsonl      -- VDB-signalen incl. overgeslagen (vwap_bounce_scan.py)
+     state.json                  -- gesimuleerd saldo (state_module.py)
+ 
+ Uitsluitend Python-stdlib (http.server), geen extra dependencies.
+@@ -46,6 +48,7 @@ LOGS_DIR = os.path.join(STRATEGY_DIR, "logs")
+ JOURNAL_PATH = os.environ.get("TTS_JOURNAL_FILE", os.path.join(LOGS_DIR, "trade_journal.csv"))
+ CHARTS_DIR = os.path.join(LOGS_DIR, "charts")
+ SIGNALS_PATH = os.environ.get("RVB_SIGNAL_LOG", os.path.join(LOGS_DIR, "rvb_signals.jsonl"))
++VDB_SIGNALS_PATH = os.environ.get("VDB_SIGNAL_LOG", os.path.join(LOGS_DIR, "vdb_signals.jsonl"))
+ STATE_PATH = os.environ.get("TTS_STATE_FILE", os.path.join(STRATEGY_DIR, "state.json"))
+ EVENTS_PATH = os.environ.get("EVENT_LOG_FILE", os.path.join(LOGS_DIR, "events.jsonl"))
+ HOST = os.environ.get("DASHBOARD_BIND", "127.0.0.1")   # 0.0.0.0 alleen in de Docker-Caddy-situatie, zie DASHBOARD_DEPLOY.md
+@@ -55,6 +58,7 @@ STRATEGIES = {
+     "TTS": ("Touch & Turn", "eerste 90 min"),
+     "QFS": ("Quick Flip", "eerste 90 min"),
+     "RVB": ("Relative Volume Breakout", "hele dag"),
++    "VDB": ("VWAP Dynamic Bounce", "hele dag"),
+ }
+ RESULT_LABELS = {
+     "take_profit_hit": "Take-profit", "stop_loss_hit": "Stop-loss",
+@@ -120,18 +124,26 @@ def load_trades() -> list[dict]:
+ 
+ 
+ def load_signals(day: str) -> list[dict]:
+-    if not os.path.exists(SIGNALS_PATH):
+-        return []
++    """
++    Signalen-zonder-trade van zowel RVB als VDB (elk zijn eigen
++    logbestand, bewust niet samengevoegd tot één bestand -- elke
++    scanner schrijft alleen zijn eigen log). `strategy` wordt gezet op
++    "RVB" als het veld ontbreekt (oudere regels, vóór VDB bestond).
++    """
+     out = []
+-    with open(SIGNALS_PATH) as f:
+-        for line in f:
+-            try:
+-                s = json.loads(line)
+-            except json.JSONDecodeError:
+-                continue
+-            if s.get("time", "").startswith(day):
+-                out.append(s)
+-    return out
++    for path, default_strategy in ((SIGNALS_PATH, "RVB"), (VDB_SIGNALS_PATH, "VDB")):
++        if not os.path.exists(path):
++            continue
++        with open(path) as f:
++            for line in f:
++                try:
++                    s = json.loads(line)
++                except json.JSONDecodeError:
++                    continue
++                if s.get("time", "").startswith(day):
++                    s.setdefault("strategy", default_strategy)
++                    out.append(s)
++    return sorted(out, key=lambda s: s.get("time", ""))
+ 
+ 
+ def load_events(day: str) -> list[dict]:
+@@ -211,7 +223,7 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
+ # ---------------------------------------------------------------------------
+ 
+ CSS = """
+-:root{--paper:#eef1f4;--sheet:#fff;--ink:#18232e;--ink-2:#4c5a68;--ink-3:#8a97a4;--rule:#d6dce3;--tts:#2457a6;--qfs:#7a3e9d;--rvb:#0f8a78;--win:#1e8e5a;--loss:#c0392b;--flat:#8a97a4}
++:root{--paper:#eef1f4;--sheet:#fff;--ink:#18232e;--ink-2:#4c5a68;--ink-3:#8a97a4;--rule:#d6dce3;--tts:#2457a6;--qfs:#7a3e9d;--rvb:#0f8a78;--vdb:#b8720a;--win:#1e8e5a;--loss:#c0392b;--flat:#8a97a4}
+ *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:"Segoe UI",-apple-system,"Helvetica Neue",Arial,sans-serif;font-size:15px;line-height:1.45;font-variant-numeric:tabular-nums}
+ .page{max-width:1040px;margin:0 auto;padding:28px 20px 60px}
+ header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:8px}header h1{font-size:26px;font-weight:600;margin:0;letter-spacing:-.01em}
+@@ -219,14 +231,14 @@ header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
+ .daytotal{font-size:15px;color:var(--ink-2);margin:0 0 24px}.daytotal strong{font-size:20px;font-weight:600;margin-right:6px}
+ .pos{color:var(--win)}.neg{color:var(--loss)}.zero{color:var(--flat)}
+ .timeline{background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:18px 20px 12px;margin-bottom:20px}.timeline h2{font-size:14px;font-weight:600;color:var(--ink-2);margin:0 0 12px}.timeline svg{width:100%;height:auto;display:block}.timeline text{font-size:11px;fill:var(--ink-3)}.tick{stroke:var(--rule)}
+-.bar{rx:3}.bar.TTS{fill:var(--tts)}.bar.QFS{fill:var(--qfs)}.bar.RVB{fill:var(--rvb)}.bar.loss{opacity:.45}
+-.legend{display:flex;gap:18px;font-size:12px;color:var(--ink-2);margin-top:6px;flex-wrap:wrap}.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}.legend .TTS::before{background:var(--tts)}.legend .QFS::before{background:var(--qfs)}.legend .RVB::before{background:var(--rvb)}.legend .dim::before{background:var(--ink-3);opacity:.45}
+-.scores{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px}.score{background:var(--sheet);border:1px solid var(--rule);border-left-width:5px;border-radius:10px;padding:14px 16px}.score.TTS{border-left-color:var(--tts)}.score.QFS{border-left-color:var(--qfs)}.score.RVB{border-left-color:var(--rvb)}
++.bar{rx:3}.bar.TTS{fill:var(--tts)}.bar.QFS{fill:var(--qfs)}.bar.RVB{fill:var(--rvb)}.bar.VDB{fill:var(--vdb)}.bar.loss{opacity:.45}
++.legend{display:flex;gap:18px;font-size:12px;color:var(--ink-2);margin-top:6px;flex-wrap:wrap}.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}.legend .TTS::before{background:var(--tts)}.legend .QFS::before{background:var(--qfs)}.legend .RVB::before{background:var(--rvb)}.legend .VDB::before{background:var(--vdb)}.legend .dim::before{background:var(--ink-3);opacity:.45}
++.scores{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.score{background:var(--sheet);border:1px solid var(--rule);border-left-width:5px;border-radius:10px;padding:14px 16px}.score.TTS{border-left-color:var(--tts)}.score.QFS{border-left-color:var(--qfs)}.score.RVB{border-left-color:var(--rvb)}.score.VDB{border-left-color:var(--vdb)}
+ .score h3{margin:0;font-size:15px;font-weight:600}.score .sub{color:var(--ink-3);font-size:12px;margin-bottom:10px}.score .pnl{font-size:24px;font-weight:600;line-height:1.1}.score dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:10px 0 0;font-size:13px}.score dt{color:var(--ink-3)}.score dd{margin:0;text-align:right}.score .wtd{border-top:1px solid var(--rule);margin-top:10px;padding-top:8px;font-size:12px;color:var(--ink-2)}
+ .trades h2{font-size:16px;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline}.filters{display:flex;gap:6px}.filters button{border:1px solid var(--rule);background:var(--sheet);border-radius:999px;padding:3px 11px;font:inherit;font-size:12px;cursor:pointer;color:var(--ink-2)}.filters button[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
+ .trade{background:var(--sheet);border:1px solid var(--rule);border-radius:10px;margin-bottom:8px;overflow:hidden}.trade summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:8px 52px 44px 70px 1fr 150px 90px 24px;align-items:center;gap:12px;padding:10px 14px 10px 0}.trade summary::-webkit-details-marker{display:none}.trade summary:focus-visible{outline:2px solid var(--ink-2);outline-offset:-2px}
+-.swatch{align-self:stretch}.trade.TTS .swatch{background:var(--tts)}.trade.QFS .swatch{background:var(--qfs)}.trade.RVB .swatch{background:var(--rvb)}
+-.t-time{color:var(--ink-2);font-size:13px}.t-strat{font-size:12px;font-weight:600;letter-spacing:.02em}.trade.TTS .t-strat{color:var(--tts)}.trade.QFS .t-strat{color:var(--qfs)}.trade.RVB .t-strat{color:var(--rvb)}.t-sym{font-weight:600}.t-desc{color:var(--ink-2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.t-result{font-size:13px}.t-pnl{text-align:right;font-weight:600}.chev{color:var(--ink-3);transition:transform .15s}.trade[open] .chev{transform:rotate(90deg)}
++.swatch{align-self:stretch}.trade.TTS .swatch{background:var(--tts)}.trade.QFS .swatch{background:var(--qfs)}.trade.RVB .swatch{background:var(--rvb)}.trade.VDB .swatch{background:var(--vdb)}
++.t-time{color:var(--ink-2);font-size:13px}.t-strat{font-size:12px;font-weight:600;letter-spacing:.02em}.trade.TTS .t-strat{color:var(--tts)}.trade.QFS .t-strat{color:var(--qfs)}.trade.RVB .t-strat{color:var(--rvb)}.trade.VDB .t-strat{color:var(--vdb)}.t-sym{font-weight:600}.t-desc{color:var(--ink-2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.t-result{font-size:13px}.t-pnl{text-align:right;font-weight:600}.chev{color:var(--ink-3);transition:transform .15s}.trade[open] .chev{transform:rotate(90deg)}
+ .detail{display:grid;grid-template-columns:1fr 260px;gap:18px;padding:4px 14px 16px 20px;border-top:1px solid var(--rule)}.detail figure{margin:0}.detail img{width:100%;height:auto;border:1px solid var(--rule);border-radius:6px;background:#fbfcfd}.detail .nochart{border:1px dashed var(--rule);border-radius:6px;padding:40px;text-align:center;color:var(--ink-3);font-size:13px}.detail dl{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;font-size:13px;margin:8px 0 0}.detail dt{color:var(--ink-3)}.detail dd{margin:0}.detail .note{font-size:13px;color:var(--ink-2);margin-top:12px;padding-top:10px;border-top:1px solid var(--rule)}
+ .empty{background:var(--sheet);border:1px dashed var(--rule);border-radius:10px;padding:26px;color:var(--ink-3);text-align:center}
+ .signals{margin-top:26px;font-size:13px;color:var(--ink-2)}.signals h2{font-size:14px;font-weight:600;margin:0 0 6px;color:var(--ink-2)}.signals ul{margin:0;padding-left:18px}
+@@ -337,9 +349,10 @@ def render(d: dict) -> str:
+ 
+     trades = "".join(trade_html(t) for t in d["trades"]) or '<div class="empty">Geen trades. Zodra een trade sluit verschijnt hij hier met grafiek.</div>'
+     sig_items = "".join(
+-        f"<li>{e(s.get('time', '')[11:16])} {e(s.get('symbol', ''))} {e(s.get('direction', ''))} — {e(s.get('reason', 'overgeslagen'))}</li>"
++        f"<li>{e(s.get('time', '')[11:16])} <strong>{e(s.get('strategy', ''))}</strong> {e(s.get('symbol', ''))} "
++        f"{e(s.get('direction', ''))} — {e(s.get('reason', 'overgeslagen'))}</li>"
+         for s in d["signals_skipped"])
+-    signals = f'<section class="signals"><h2>RVB-signalen zonder trade ({len(d["signals_skipped"])})</h2><ul>{sig_items}</ul></section>' if sig_items else ""
++    signals = f'<section class="signals"><h2>Signalen zonder trade ({len(d["signals_skipped"])})</h2><ul>{sig_items}</ul></section>' if sig_items else ""
+ 
+     LVL = {"urgent": "Urgent", "warning": "Let op", "info": "Info"}
+     order = {"urgent": 0, "warning": 1, "info": 2}
+@@ -359,12 +372,12 @@ def render(d: dict) -> str:
+ <header><h1>{e(titel)}</h1><nav class="daynav" aria-label="Dag kiezen">{nav_prev}{nav_next}</nav></header>
+ <p class="daytotal">{daytotal}</p>
+ <section class="timeline" aria-label="Verloop van de handelsdag"><h2>Handelsdag 15:30–22:00 CEST</h2>{timeline_svg(d['trades'])}
+-<div class="legend"><span class="TTS">Touch &amp; Turn</span><span class="QFS">Quick Flip</span><span class="RVB">Relative Volume Breakout</span><span class="dim">Verliestrade (transparant, onder de lijn)</span></div></section>
++<div class="legend"><span class="TTS">Touch &amp; Turn</span><span class="QFS">Quick Flip</span><span class="RVB">Relative Volume Breakout</span><span class="VDB">VWAP Dynamic Bounce</span><span class="dim">Verliestrade (transparant, onder de lijn)</span></div></section>
+ <section class="scores" aria-label="Resultaat per strategie">{''.join(cards)}</section>
+ <section class="trades"><h2>Trades van deze dag<div class="filters" role="group" aria-label="Filter op strategie">
+-<button type="button" aria-pressed="true" data-f="all">Alle</button><button type="button" aria-pressed="false" data-f="TTS">TTS</button><button type="button" aria-pressed="false" data-f="QFS">QFS</button><button type="button" aria-pressed="false" data-f="RVB">RVB</button></div></h2>
++<button type="button" aria-pressed="true" data-f="all">Alle</button><button type="button" aria-pressed="false" data-f="TTS">TTS</button><button type="button" aria-pressed="false" data-f="QFS">QFS</button><button type="button" aria-pressed="false" data-f="RVB">RVB</button><button type="button" aria-pressed="false" data-f="VDB">VDB</button></div></h2>
+ {trades}</section>{signals}{events_html}
+-<p class="footer">Bron: trade_journal.csv, events.jsonl, rvb_signals.jsonl en logs/charts. Pagina gegenereerd {d['generated_at']}.</p>
++<p class="footer">Bron: trade_journal.csv, events.jsonl, rvb_signals.jsonl, vdb_signals.jsonl en logs/charts. Pagina gegenereerd {d['generated_at']}.</p>
+ </div><script>{JS}</script></body></html>"""
+ 
+ 
+diff --git a/execute_vwap_bounce_trade_standalone.py b/execute_vwap_bounce_trade_standalone.py
+new file mode 100644
+index 0000000..cd2d5ee
+--- /dev/null
++++ b/execute_vwap_bounce_trade_standalone.py
+@@ -0,0 +1,88 @@
++"""
++execute_vwap_bounce_trade_standalone.py — VDB, Losgekoppelde Trade-uitvoering
++
++Analoog aan execute_rvb_trade_standalone.py: krijgt een AL-COMPLETE
++order-spec mee (entry/TP/SL/aantal al berekend in vwap_bounce_scan.py)
++en voert de zelf-beheerde OCO-flow uit via execute_managed_trade().
++Draait als losgekoppeld achtergrondproces zodat de 5-minuten-cron niet
++geblokkeerd wordt.
++
++Zelfde geforceerde-sluitingstijd als RVB (21:55 CEST) -- VDB is net als
++RVB een dagstrategie, geen 90-minuten-venster zoals TTS/QFS.
++
++Gebruik (aangeroepen door vwap_bounce_scan.py, niet handmatig):
++    python3 execute_vwap_bounce_trade_standalone.py --symbol AAPL --direction LONG \\
++        --entry 230.10 --take-profit 232.32 --stop-loss 229.10 --quantity 4.3 \\
++        --vwap 229.95 --touch-low 229.10 --touch-high 230.40
++"""
++
++from __future__ import annotations
++
++import argparse
++import logging
++import os
++import sys
++from datetime import datetime
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++
++logging.basicConfig(
++    level=logging.INFO,
++    format="%(asctime)s|%(levelname)-.1s| %(message)s",
++    filename=f"/opt/strategy/logs/vdb_trade_{os.getpid()}.log",
++)
++logger = logging.getLogger("execute_vwap_bounce_trade_standalone")
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--symbol", required=True)
++    parser.add_argument("--direction", required=True, choices=["LONG", "SHORT"])
++    parser.add_argument("--entry", required=True, type=float)
++    parser.add_argument("--take-profit", required=True, type=float)
++    parser.add_argument("--stop-loss", required=True, type=float)
++    parser.add_argument("--quantity", required=True, type=float)
++    parser.add_argument("--vwap", required=True, type=float)
++    parser.add_argument("--touch-low", required=True, type=float)
++    parser.add_argument("--touch-high", required=True, type=float)
++    args = parser.parse_args()
++
++    from order_module import BracketOrderSpec, execute_managed_trade
++    from vwap_bounce_module import VDB_FORCED_CLOSE_TIME, OCA_PREFIX
++
++    spec = BracketOrderSpec(
++        action="BUY" if args.direction == "LONG" else "SELL",
++        quantity=args.quantity,
++        entry_price=args.entry,
++        take_profit=args.take_profit,
++        stop_loss=args.stop_loss,
++        oca_group=f"{OCA_PREFIX}{args.symbol}_{args.direction}_{int(args.entry * 100)}",
++        strategy="VDB", box_high=args.touch_high, box_low=args.touch_low,
++        reason=(
++            f"VDB {args.direction} {args.symbol} @ {args.entry:.2f} -- bounce op VWAP {args.vwap:.2f} "
++            f"(touch-candle [{args.touch_low:.2f}-{args.touch_high:.2f}]); "
++            f"TP {args.take_profit:.2f} (2:1), SL {args.stop_loss:.2f} (structuurgebaseerd)"
++        ),
++    )
++    logger.info(f"Losgekoppeld VDB-tradeproces gestart, PID {os.getpid()}: {spec.reason}")
++
++    nu = datetime.now()
++    deadline = nu.replace(hour=VDB_FORCED_CLOSE_TIME.hour, minute=VDB_FORCED_CLOSE_TIME.minute, second=0, microsecond=0)
++    resterend = max(1.0, (deadline - nu).total_seconds() / 60)
++    fill_wait = min(15.0, resterend)
++
++    try:
++        result = execute_managed_trade(spec, args.symbol, max_fill_wait_minutes=fill_wait,
++                                       forced_close_time=VDB_FORCED_CLOSE_TIME)
++        logger.info(f"Trade afgerond: {result}")
++    except Exception as e:
++        logger.error(f"Onverwachte fout in VDB-tradeproces voor {args.symbol}: {e}")
++        try:
++            from telegram_notify import send_telegram_message
++            send_telegram_message(f"⚠️ Onverwachte fout in VDB-tradeproces voor {args.symbol}: {e}")
++        except Exception:
++            pass
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/main.py b/main.py
+index c6beb0e..27ebbad 100644
+--- a/main.py
++++ b/main.py
+@@ -280,7 +280,7 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3)
+     # draaien op ALLE gekozen aandelen, om ze onderling te kunnen
+     # vergelijken -- de Fibonacci-flow (run_symbol_cycle, OCA-prefix
+     # "TTS_") en de bevestigingsflow (run_reversal_symbol_cycle,
+-    # OCA-prefix "TT2_") zijn al los van elkaar herkenbaar in de
++    # OCA-prefix "QFS_") zijn al los van elkaar herkenbaar in de
+     # journal, dus geen aanpassing nodig aan de CSV-structuur zelf om
+     # ze achteraf te kunnen scheiden. Bewust GEEN limiet en GEEN
+     # opsplitsing van de watchlist (op uitdrukkelijk verzoek) -- meer
+diff --git a/run_vwap_bounce_cycle.sh b/run_vwap_bounce_cycle.sh
+new file mode 100755
+index 0000000..794e90e
+--- /dev/null
++++ b/run_vwap_bounce_cycle.sh
+@@ -0,0 +1,37 @@
++#!/bin/bash
++#
++# run_vwap_bounce_cycle.sh — VWAP Dynamic Bounce, Cron-wrapper
++# ==============================================================
++# Zelfde opzet als run_rvb_cycle.sh (flock tegen overlappende runs,
++# dag-gestempeld logbestand, /etc/environment inladen), maar zonder
++# baseline-taak -- VDB heeft geen historische volume-baseline nodig,
++# de VWAP wordt elke scan vers herberekend uit de candles van vandaag.
++#
++# Crontab (CEST, ma-vr):
++#   */5 16-21 * * 1-5  /opt/strategy/run_vwap_bounce_cycle.sh          # dry-run
++#   */5 16-21 * * 1-5  /opt/strategy/run_vwap_bounce_cycle.sh --live   # live
++#
++# De scan vóór 16:20 doet zelf niets (nog niet genoeg trend-
++# geschiedenis) en kost alleen een sessie-check.
++
++set -euo pipefail
++set -a
++source /etc/environment
++set +a
++
++STRATEGY_DIR="/opt/strategy"
++LOG_DIR="$STRATEGY_DIR/logs"
++DATE_STAMP=$(date +%Y-%m-%d)
++mkdir -p "$LOG_DIR" "$STRATEGY_DIR/data"
++
++MODE_ARG="${1:-}"   # leeg = dry-run, "--live" = live
++LOCK_FILE="/tmp/vdb_scan.lock"
++LOG_FILE="$LOG_DIR/vdb_scan_${DATE_STAMP}.log"
++
++(
++    flock -n 200 || { echo "$(date): vorige VDB-scan draait nog -- overgeslagen." >> "$LOG_FILE"; exit 1; }
++    echo "=== VDB scan gestart: $(date) (modus: ${MODE_ARG:-dry-run}) ===" >> "$LOG_FILE"
++    cd "$STRATEGY_DIR"
++    python3 vwap_bounce_scan.py $MODE_ARG >> "$LOG_FILE" 2>&1
++    echo "=== VDB scan afgerond: $(date) ===" >> "$LOG_FILE"
++) 200>"$LOCK_FILE"
+diff --git a/rvb_scan.py b/rvb_scan.py
+index 15548c5..694e6a1 100644
+--- a/rvb_scan.py
++++ b/rvb_scan.py
+@@ -66,7 +66,7 @@ def load_traded_today(path: str = TRADED_TODAY_PATH) -> dict:
+ 
+ 
+ def mark_traded(data: dict, symbol: str, info: dict, path: str = TRADED_TODAY_PATH) -> None:
+-    data["symbols"][symbol] = {"time": datetime.now().isoformat(timespec="seconds"), **info}
++    data["symbols"][symbol] = {"time": datetime.now().isoformat(timespec="seconds"), "strategy": "RVB", **info}
+     try:  # zelfde info als regel in het signaal-log (dashboard: "signalen zonder trade")
+         os.makedirs(os.path.dirname(SIGNAL_LOG_PATH), exist_ok=True)
+         with open(SIGNAL_LOG_PATH, "a") as f:
+diff --git a/vwap_bounce_module.py b/vwap_bounce_module.py
+new file mode 100644
+index 0000000..a1e6551
+--- /dev/null
++++ b/vwap_bounce_module.py
+@@ -0,0 +1,317 @@
++"""
++vwap_bounce_module.py — VWAP Dynamic Bounce (VDB), Strategielogica
++
++Vijfde strategie naast TTS, QFS en RVB. In tegenstelling tot de Offside
++Scalp (afgewezen wegens de real-time-databehoefte) werkt dit model op
++gewone 5-minuten OHLCV-candles -- geen tick-data of Level 2 nodig, dus
++ook bruikbaar op de bestaande (10-min vertraagde) databron.
++
++Regels (beide richtingen, gespiegeld):
++    Trend      : de laatste MIN_TREND_CANDLES candles sluiten allemaal
++                 aan dezelfde kant van de intraday VWAP (boven = uptrend
++                 voor LONG, onder = downtrend voor SHORT)
++    Touch      : de eerstvolgende candle raakt de VWAP-lijn
++                 (candle.low <= vwap <= candle.high), ongeacht de close
++    Bevestiging: de candle DAARNA sluit in de trendrichting (groen voor
++                 LONG, rood voor SHORT) EN weer aan de trendkant van de
++                 VWAP
++    Entry      : bij de close van de bevestigingscandle
++    Stop-loss  : net voorbij de low (LONG) / high (SHORT) van de
++                 touch-candle -- structuurgebaseerd, net als bij QFS,
++                 dus NIET een vaste %-afstand zoals bij RVB
++    Take-profit: vaste 2:1 R/R vanaf de entry (MVP; "exit bij nieuwe
++                 intraday high/low" uit de oorspronkelijke beschrijving
++                 is een latere upgrade -- zie onderaan)
++
++Positiegrootte: dezelfde 1%-risico / 50%-max-positiewaarde-regel als
++RVB en QFS (reversal_strategy_module.calculate_reversal_position_size).
++
++BEWUSTE MVP-KEUZE: de brondescriptie geeft twee exit-condities ("2:1 RR
++OF nieuwe intraday high") die kunnen conflicteren -- welke het eerst
++geraakt wordt, wint. Dat vraagt een aparte, actieve monitoring-lus naast
++de standaard TP/SL-bracket-order (die alleen twee vaste prijzen kent).
++Voor de eerste versie gebruiken we uitsluitend de vaste 2:1-TP, exact
++zoals destijds bij RVB is gedaan ("hybride scale-out is een latere
++upgrade"). De "nieuwe intraday high"-vervroegde-exit kan later als
++losse monitoring-check worden toegevoegd aan execute_managed_trade().
++
++Deze module bevat GEEN netwerk-/IBKR-aanroepen -- alles is puur op
++Candle-lijsten en dicts, zodat het volledig testbaar is (zie __main__).
++"""
++
++from __future__ import annotations
++
++import logging
++from dataclasses import dataclass, asdict
++from datetime import datetime, time as dt_time, timedelta
++
++from data_module import Candle
++from reversal_strategy_module import calculate_reversal_position_size
++
++logger = logging.getLogger("vwap_bounce_module")
++
++# Tijden in CEST (server-lokale tijd, consistent met order_module.MARKET_OPEN_TIME)
++MARKET_OPEN_TIME = dt_time(15, 30)
++MARKET_CLOSE_TIME = dt_time(22, 0)
++VDB_FORCED_CLOSE_TIME = dt_time(21, 55)  # positie uiterlijk 5 min vóór sluiting dicht
++
++BAR_MINUTES = 5
++MIN_TREND_CANDLES = 10          # 10x 5-min = 50 min gevestigde trend vóór een touch telt
++RR_RATIO = 2.0                   # TP-afstand = 2x SL-afstand
++STOP_BUFFER = 0.01                # kleine marge voorbij de touch-candle low/high (tegen exact-op-de-rand-ruis)
++OCA_PREFIX = "VDB_"
++
++
++@dataclass
++class VwapBounceSignal:
++    symbol: str
++    direction: str            # "LONG" / "SHORT"
++    trigger_price: float      # close van de bevestigingscandle (= beoogde entry)
++    candle_time: datetime
++    vwap_at_touch: float
++    touch_low: float
++    touch_high: float
++
++    def to_dict(self) -> dict:
++        d = asdict(self)
++        d["candle_time"] = self.candle_time.isoformat()
++        return d
++
++
++# ---------------------------------------------------------------------------
++# Hulpfuncties
++# ---------------------------------------------------------------------------
++
++def is_regular_session(ts: datetime) -> bool:
++    """True als de candle binnen de reguliere sessie (15:30-22:00 CEST) valt."""
++    return MARKET_OPEN_TIME <= ts.time() < MARKET_CLOSE_TIME
++
++
++def closed_candles(candles: list[Candle], now: datetime, bar_minutes: int = BAR_MINUTES) -> list[Candle]:
++    """Filtert de nog-lopende (onvolledige) laatste candle weg."""
++    return [c for c in candles if c.timestamp + timedelta(minutes=bar_minutes) <= now]
++
++
++# ---------------------------------------------------------------------------
++# VWAP
++# ---------------------------------------------------------------------------
++
++def compute_vwap_series(candles: list[Candle]) -> list[float]:
++    """
++    Cumulatieve intraday VWAP per candle, verankerd aan de EERSTE candle
++    in de lijst (dus: geef alleen candles van ÉÉN handelsdag mee, vanaf
++    market open). typical_price = (H+L+C)/3.
++    """
++    cum_pv = 0.0
++    cum_vol = 0.0
++    out = []
++    for c in candles:
++        typical = (c.high + c.low + c.close) / 3.0
++        cum_pv += typical * c.volume
++        cum_vol += c.volume
++        out.append(cum_pv / cum_vol if cum_vol > 0 else c.close)
++    return out
++
++
++def trend_established(candles: list[Candle], vwap_series: list[float], direction: str,
++                      n: int = MIN_TREND_CANDLES) -> bool:
++    """
++    True als de laatste n candles ALLEMAAL aan de trendkant van hun
++    eigen (op dat moment geldende) VWAP-waarde sluiten.
++    """
++    if len(candles) < n:
++        return False
++    window = list(zip(candles[-n:], vwap_series[-n:]))
++    if direction == "LONG":
++        return all(c.close > v for c, v in window)
++    if direction == "SHORT":
++        return all(c.close < v for c, v in window)
++    raise ValueError(f"Onbekende richting: {direction}")
++
++
++def touches_vwap(candle: Candle, vwap: float) -> bool:
++    """True als de candle de VWAP-lijn raakt of doorkruist (low<=vwap<=high)."""
++    return candle.low <= vwap <= candle.high
++
++
++# ---------------------------------------------------------------------------
++# Bounce-detectie
++# ---------------------------------------------------------------------------
++
++def check_bounce(symbol: str, candles: list[Candle], vwap_series: list[float]) -> VwapBounceSignal | None:
++    """
++    Toetst de LAATSTE TWEE (afgesloten) candles tegen de VDB-regels:
++    candles[-2] = de touch-candle, candles[-1] = de bevestigingscandle.
++    `candles` en `vwap_series` moeten dezelfde lengte hebben (index-
++    voor-index bij elkaar passend) en van ÉÉN handelsdag zijn.
++    """
++    if len(candles) != len(vwap_series):
++        raise ValueError("candles en vwap_series moeten gelijke lengte hebben")
++    if len(candles) < MIN_TREND_CANDLES + 2:
++        return None
++
++    touch_idx = len(candles) - 2
++    confirm_idx = len(candles) - 1
++    touch_c, confirm_c = candles[touch_idx], candles[confirm_idx]
++    touch_vwap = vwap_series[touch_idx]
++
++    if not touches_vwap(touch_c, touch_vwap):
++        return None
++
++    for direction in ("LONG", "SHORT"):
++        if not trend_established(candles[:touch_idx], vwap_series[:touch_idx], direction):
++            continue
++        if direction == "LONG" and confirm_c.is_bullish and confirm_c.close > vwap_series[confirm_idx]:
++            return VwapBounceSignal(
++                symbol=symbol, direction="LONG", trigger_price=confirm_c.close,
++                candle_time=confirm_c.timestamp, vwap_at_touch=touch_vwap,
++                touch_low=touch_c.low, touch_high=touch_c.high,
++            )
++        if direction == "SHORT" and confirm_c.is_bearish and confirm_c.close < vwap_series[confirm_idx]:
++            return VwapBounceSignal(
++                symbol=symbol, direction="SHORT", trigger_price=confirm_c.close,
++                candle_time=confirm_c.timestamp, vwap_at_touch=touch_vwap,
++                touch_low=touch_c.low, touch_high=touch_c.high,
++            )
++    return None
++
++
++def scan_symbol(symbol: str, today_candles: list[Candle], now: datetime) -> VwapBounceSignal | None:
++    """
++    Volledige toets voor één symbool op één scan-moment: VWAP-serie
++    herberekenen over alle candles van vandaag, alleen de laatste twee
++    AFGESLOTEN candles tegen de regels leggen.
++    """
++    trade_date = now.date()
++    vandaag = [c for c in today_candles if c.timestamp.date() == trade_date and is_regular_session(c.timestamp)]
++    afgesloten = closed_candles(vandaag, now)
++    if len(afgesloten) < MIN_TREND_CANDLES + 2:
++        return None
++
++    # Sanity: een candle die veel ouder is dan één blok wijst op
++    # vertraagde/ontbrekende data.
++    leeftijd = now - afgesloten[-1].timestamp
++    if leeftijd > timedelta(minutes=3 * BAR_MINUTES + 12):  # ruimte voor 10-min data-vertraging
++        logger.warning(f"{symbol}: laatste candle is {leeftijd} oud -- data te oud voor een entry.")
++        return None
++
++    vwap_series = compute_vwap_series(afgesloten)
++    return check_bounce(symbol, afgesloten, vwap_series)
++
++
++# ---------------------------------------------------------------------------
++# Niveaus en positiegrootte
++# ---------------------------------------------------------------------------
++
++def calculate_vdb_stop_loss(signal: VwapBounceSignal, buffer: float = STOP_BUFFER) -> float:
++    if signal.direction == "LONG":
++        return round(signal.touch_low - buffer, 2)
++    if signal.direction == "SHORT":
++        return round(signal.touch_high + buffer, 2)
++    raise ValueError(f"Onbekende richting: {signal.direction}")
++
++
++def calculate_vdb_take_profit(direction: str, entry_price: float, stop_loss: float,
++                              rr_ratio: float = RR_RATIO) -> float:
++    sl_afstand = abs(entry_price - stop_loss)
++    if direction == "LONG":
++        return round(entry_price + rr_ratio * sl_afstand, 2)
++    if direction == "SHORT":
++        return round(entry_price - rr_ratio * sl_afstand, 2)
++    raise ValueError(f"Onbekende richting: {direction}")
++
++
++def build_vdb_trade(signal: VwapBounceSignal, capital: float) -> dict:
++    """
++    Zet een signaal om in concrete trade-parameters, met hetzelfde
++    risicobeheer als TTS/QFS/RVB (1% risico, 50% max-positiewaarde).
++    Raises ValueError als geen geldige trade mogelijk is.
++    """
++    sl = calculate_vdb_stop_loss(signal)
++    tp = calculate_vdb_take_profit(signal.direction, signal.trigger_price, sl)
++    size, risk_amount, capped = calculate_reversal_position_size(
++        entry_price=signal.trigger_price, stop_loss=sl, capital=capital, direction=signal.direction,
++    )
++    if size * signal.trigger_price < 5.0:
++        raise ValueError(f"positiewaarde te klein met €{capital:.2f} kapitaal")
++    return {
++        "symbol": signal.symbol,
++        "direction": signal.direction,
++        "entry_price": round(signal.trigger_price, 2),
++        "take_profit": tp,
++        "stop_loss": sl,
++        "quantity": size,
++        "risk_amount": round(risk_amount, 2),
++        "capped_by_max_value": capped,
++        "oca_group": f"{OCA_PREFIX}{signal.symbol}_{signal.direction}_{int(signal.trigger_price * 100)}",
++    }
++
++
++# ---------------------------------------------------------------------------
++# Zelftest (geen IBKR nodig): python3 vwap_bounce_module.py
++# ---------------------------------------------------------------------------
++
++if __name__ == "__main__":
++    logging.basicConfig(level=logging.INFO, format="%(levelname)-.1s| %(message)s")
++
++    def mk(hh, mm, o, h, l, c, v):
++        return Candle(datetime(2026, 9, 9, hh, mm), o, h, l, c, v)
++
++    # Uptrend: 10 candles die allemaal boven hun VWAP sluiten (constant
++    # oplopende prijs, gelijk volume -- VWAP loopt onder de prijs mee).
++    candles = []
++    prijs = 100.0
++    t = (15, 30)
++    for i in range(10):
++        hh, mm = t
++        candles.append(mk(hh, mm, prijs, prijs + 0.5, prijs - 0.1, prijs + 0.4, 100))
++        prijs += 0.5
++        mm += 5
++        if mm >= 60:
++            hh, mm = hh + 1, mm - 60
++        t = (hh, mm)
++
++    vwap_check = compute_vwap_series(candles)
++    assert trend_established(candles, vwap_check, "LONG")
++    assert not trend_established(candles, vwap_check, "SHORT")
++
++    # Touch-candle: zakt terug tot exact op de lopende VWAP.
++    hh, mm = t
++    vwap_nu = compute_vwap_series(candles)[-1]
++    touch = mk(hh, mm, prijs, prijs + 0.1, vwap_nu - 0.05, vwap_nu - 0.02, 100)
++    mm += 5
++    if mm >= 60:
++        hh, mm = hh + 1, mm - 60
++
++    # Bevestiging: groene candle, sluit weer boven VWAP -> LONG-signaal.
++    confirm_long = mk(hh, mm, vwap_nu - 0.02, vwap_nu + 0.6, vwap_nu - 0.1, vwap_nu + 0.5, 100)
++    reeks = candles + [touch, confirm_long]
++    vwap_reeks = compute_vwap_series(reeks)
++    sig = check_bounce("TEST", reeks, vwap_reeks)
++    assert sig and sig.direction == "LONG", sig
++    assert sig.touch_low == touch.low and sig.touch_high == touch.high
++
++    # Bevestiging sluit rood -> geen signaal (bevestiging mist).
++    confirm_geen = mk(hh, mm, vwap_nu - 0.02, vwap_nu + 0.1, vwap_nu - 0.3, vwap_nu - 0.2, 100)
++    reeks_geen = candles + [touch, confirm_geen]
++    assert check_bounce("TEST", reeks_geen, compute_vwap_series(reeks_geen)) is None
++
++    # scan_symbol met een nog-lopende laatste candle wordt genegeerd.
++    now_te_vroeg = datetime(2026, 9, 9, confirm_long.timestamp.hour, confirm_long.timestamp.minute) + timedelta(minutes=1)
++    assert scan_symbol("TEST", reeks, now_te_vroeg) is None
++    now_ok = confirm_long.timestamp + timedelta(minutes=BAR_MINUTES)
++    sig2 = scan_symbol("TEST", reeks, now_ok)
++    assert sig2 and sig2.direction == "LONG"
++
++    # Niveaus + positiegrootte
++    sl = calculate_vdb_stop_loss(sig)
++    tp = calculate_vdb_take_profit("LONG", sig.trigger_price, sl)
++    assert sl == round(touch.low - STOP_BUFFER, 2)
++    assert tp > sig.trigger_price > sl
++
++    trade = build_vdb_trade(sig, capital=2000)
++    assert trade["oca_group"].startswith("VDB_TEST_LONG_")
++    assert trade["stop_loss"] == sl and trade["take_profit"] == tp
++
++    print("Alle VDB-zelftests geslaagd.")
++    print(trade)
+diff --git a/vwap_bounce_scan.py b/vwap_bounce_scan.py
+new file mode 100644
+index 0000000..3569f16
+--- /dev/null
++++ b/vwap_bounce_scan.py
+@@ -0,0 +1,200 @@
++"""
++vwap_bounce_scan.py — VDB, 5-minuten-scanner (cron-ingang)
++
++Eén korte, complete scan-cyclus per cron-run (geen langlopend proces),
++zelfde opzet als rvb_scan.py maar ZONDER baseline-stap -- VWAP wordt
++elke run vers herberekend uit de candles van vandaag, er is geen
++historische volume-baseline nodig zoals bij RVB:
++    1. Sessie-check + tickle (automatische re-auth)
++    2. "Al gehandeld vandaag"-bestand laden
++    3. Per symbool (sequentieel, met korte pauze): candles van vandaag
++       ophalen en scan_symbol() toepassen
++    4. Bij een signaal: symbool direct als "gehandeld" markeren (VÓÓR
++       het dispatchen) en execute_vwap_bounce_trade_standalone.py
++       losgekoppeld starten
++
++Cron (zie run_vwap_bounce_cycle.sh):
++    */5 16-21 * * 1-5   -> scans om 16:35, 16:40, ... 21:55 (vóór 16:20
++                           is er nog geen MIN_TREND_CANDLES-geschiedenis)
++
++Gebruik:
++    python3 vwap_bounce_scan.py            # dry-run: alleen signalen loggen/melden
++    python3 vwap_bounce_scan.py --live     # signalen ook daadwerkelijk uitvoeren
++"""
++
++from __future__ import annotations
++
++import json
++import logging
++import os
++import subprocess
++import sys
++import time
++from datetime import datetime, time as dt_time
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++
++logging.basicConfig(level=logging.INFO, format="%(asctime)s|%(levelname)-.1s| %(message)s")
++logger = logging.getLogger("vwap_bounce_scan")
++
++STRATEGY_DIR = os.path.dirname(os.path.abspath(__file__))
++TRADED_TODAY_PATH = os.environ.get("VDB_TRADED_FILE", "/opt/strategy/data/vdb_traded_today.json")
++SIGNAL_LOG_PATH = os.environ.get("VDB_SIGNAL_LOG", "/opt/strategy/logs/vdb_signals.jsonl")  # voor het dashboard
++FIRST_SCAN_TIME = dt_time(16, 20)   # eerst mogelijke moment met genoeg trend-geschiedenis
++LAST_ENTRY_TIME = dt_time(21, 30)   # na dit tijdstip geen nieuwe entries meer (te weinig tijd tot 21:55)
++PAUSE_BETWEEN_SYMBOLS_S = 1.0
++MAX_NEW_TRADES_PER_RUN = 2          # zelfde voorzichtigheidsgrens als RVB
++
++
++# ---------------------------------------------------------------------------
++# "Al gehandeld vandaag"
++# ---------------------------------------------------------------------------
++
++def load_traded_today(path: str = TRADED_TODAY_PATH) -> dict:
++    vandaag = datetime.now().date().isoformat()
++    try:
++        with open(path) as f:
++            data = json.load(f)
++        if data.get("date") == vandaag:
++            return data
++    except FileNotFoundError:
++        pass
++    except Exception as e:
++        logger.error(f"Kon traded-today-bestand niet lezen ({e}) -- start leeg.")
++    return {"date": vandaag, "symbols": {}}
++
++
++def mark_traded(data: dict, symbol: str, info: dict, path: str = TRADED_TODAY_PATH) -> None:
++    data["symbols"][symbol] = {"time": datetime.now().isoformat(timespec="seconds"), "strategy": "VDB", **info}
++    try:  # zelfde info als regel in het signaal-log (dashboard: "signalen zonder trade")
++        os.makedirs(os.path.dirname(SIGNAL_LOG_PATH), exist_ok=True)
++        with open(SIGNAL_LOG_PATH, "a") as f:
++            f.write(json.dumps({"symbol": symbol, **data["symbols"][symbol]}) + "\n")
++    except Exception as e:
++        logger.warning(f"Kon signaal-log niet schrijven: {e}")
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    tmp = path + ".tmp"
++    with open(tmp, "w") as f:
++        json.dump(data, f, indent=2)
++    os.replace(tmp, path)
++
++
++# ---------------------------------------------------------------------------
++# Scan
++# ---------------------------------------------------------------------------
++
++def ensure_session() -> bool:
++    from auth_module import check_ibkr_authenticated, trigger_ibkr_authenticate
++    from ibkr_web_api import tickle
++    if check_ibkr_authenticated():
++        tickle()
++        return True
++    logger.warning("IBKR-sessie ongeldig -- automatische re-auth wordt geprobeerd.")
++    result = trigger_ibkr_authenticate()
++    ok = bool(result.get("triggered"))
++    if not ok:
++        logger.error(f"Re-auth mislukt: {result}")
++    return ok
++
++
++def dispatch_trade(trade: dict, signal_info: dict, dry_run: bool) -> None:
++    cmd = [
++        sys.executable, os.path.join(STRATEGY_DIR, "execute_vwap_bounce_trade_standalone.py"),
++        "--symbol", trade["symbol"], "--direction", trade["direction"],
++        "--entry", str(trade["entry_price"]), "--take-profit", str(trade["take_profit"]),
++        "--stop-loss", str(trade["stop_loss"]), "--quantity", str(trade["quantity"]),
++        "--vwap", str(signal_info["vwap_at_touch"]),
++        "--touch-low", str(signal_info["touch_low"]), "--touch-high", str(signal_info["touch_high"]),
++    ]
++    if dry_run:
++        logger.info(f"[DRY-RUN] zou starten: {' '.join(cmd)}")
++        return
++    subprocess.Popen(cmd, cwd=STRATEGY_DIR, start_new_session=True,
++                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++    logger.info(f"Losgekoppeld VDB-tradeproces gestart voor {trade['symbol']}.")
++
++
++def run_scan(dry_run: bool = True) -> dict:
++    from news_module import FALLBACK_WATCHLIST
++    from data_module import get_historical_candles
++    from vwap_bounce_module import scan_symbol, build_vdb_trade
++    from state_module import get_simulated_balance
++
++    now = datetime.now()
++    samenvatting = {"scanned": 0, "signals": 0, "dispatched": 0, "skipped": []}
++
++    if now.time() < FIRST_SCAN_TIME:
++        logger.info(f"Vóór {FIRST_SCAN_TIME} -- nog niet genoeg trend-geschiedenis, niets te doen.")
++        return samenvatting
++    if now.time() >= LAST_ENTRY_TIME:
++        logger.info(f"Na {LAST_ENTRY_TIME} -- geen nieuwe entries meer vandaag.")
++        return samenvatting
++
++    if not ensure_session():
++        _notify("🚨 VDB-scan: geen geldige IBKR-sessie en re-auth mislukt -- scan overgeslagen.")
++        return samenvatting
++
++    traded = load_traded_today()
++    capital = get_simulated_balance()
++
++    # Kapitaal per trade: hetzelfde compounding-saldo als TTS/QFS/RVB.
++    # De VIX-allocatie (risk_module) is bewust NIET toegepast in de MVP
++    # -- VDB deelt nog geen budget met de andere strategieën, net als
++    # bij RVB, tot de A/B-cijfers er zijn.
++
++    nieuwe_trades = 0
++    for symbol in FALLBACK_WATCHLIST:
++        if symbol in traded["symbols"]:
++            continue
++        if nieuwe_trades >= MAX_NEW_TRADES_PER_RUN:
++            break
++
++        candles = get_historical_candles(symbol, duration="1d", bar_size="5min")
++        time.sleep(PAUSE_BETWEEN_SYMBOLS_S)
++        samenvatting["scanned"] += 1
++        if not candles:
++            continue
++
++        signal = scan_symbol(symbol, candles, datetime.now())
++        if signal is None:
++            continue
++        samenvatting["signals"] += 1
++
++        try:
++            trade = build_vdb_trade(signal, capital)
++        except ValueError as e:
++            logger.warning(f"{symbol}: signaal maar geen trade -- {e}")
++            mark_traded(traded, symbol, {"status": "skipped", "reason": str(e)})
++            continue
++
++        # Eerst markeren, dan pas dispatchen -- nooit andersom.
++        mark_traded(traded, symbol, {"status": "dry-run" if dry_run else "dispatched",
++                                     "direction": trade["direction"], "entry": trade["entry_price"],
++                                     "vwap_at_touch": signal.vwap_at_touch,
++                                     "touch_low": signal.touch_low, "touch_high": signal.touch_high})
++        _notify(
++            f"{'🧪 [DRY-RUN] ' if dry_run else '📡 '}VDB {trade['direction']} {symbol}: bounce op VWAP "
++            f"{signal.vwap_at_touch:.2f}, bevestiging @ {signal.trigger_price:.2f}\n"
++            f"Entry {trade['entry_price']:.2f} | TP {trade['take_profit']:.2f} | SL {trade['stop_loss']:.2f} | "
++            f"{trade['quantity']:g} stuks, risico €{trade['risk_amount']:.2f}"
++        )
++        dispatch_trade(trade, {
++            "vwap_at_touch": signal.vwap_at_touch, "touch_low": signal.touch_low, "touch_high": signal.touch_high,
++        }, dry_run)
++        nieuwe_trades += 1
++        samenvatting["dispatched"] += 1
++
++    logger.info(f"Scan afgerond: {samenvatting}")
++    return samenvatting
++
++
++def _notify(text: str) -> None:
++    try:
++        from telegram_notify import send_telegram_message
++        send_telegram_message(text)
++    except Exception as e:
++        logger.warning(f"Telegram-melding mislukt: {e}")
++
++
++if __name__ == "__main__":
++    run_scan(dry_run="--live" not in sys.argv)
