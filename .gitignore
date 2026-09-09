@@ -6,3 +6,4 @@ state.json
 main.py.save
 2.8,
 3.0
+data/*_traded_today.json
