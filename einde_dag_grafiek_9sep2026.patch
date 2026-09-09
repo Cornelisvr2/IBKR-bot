@@ -1,0 +1,142 @@
+diff --git a/chart_module.py b/chart_module.py
+index 3fb83cf..db4310a 100644
+--- a/chart_module.py
++++ b/chart_module.py
+@@ -32,6 +32,35 @@ logger = logging.getLogger("chart_module")
+ CHART_OUTPUT_DIR = "/opt/strategy/logs/charts"
+ 
+ 
++def _nabeloop_na_uitstap(candles, exit_time, direction, take_profit, stop_loss) -> str:
++    """Tekst over wat de koers NA de uitstap deed t.o.v. TP/SL ("" als n.v.t.)."""
++    if exit_time is None:
++        return ""
++    later = [c for c in candles if c.timestamp > exit_time]
++    if not later:
++        return ""
++    tp_tijd = sl_tijd = None
++    for c in later:
++        raakt_tp = c.high >= take_profit if direction == "LONG" else c.low <= take_profit
++        raakt_sl = c.low <= stop_loss if direction == "LONG" else c.high >= stop_loss
++        if raakt_tp and tp_tijd is None:
++            tp_tijd = c.timestamp
++        if raakt_sl and sl_tijd is None:
++            sl_tijd = c.timestamp
++        if tp_tijd and sl_tijd:
++            break
++    slot = later[-1].close
++    minuten = int((later[-1].timestamp - exit_time).total_seconds() // 60)
++    regels = [f"Na uitstap ({minuten} min tot slot {slot:.2f}):"]
++    if tp_tijd is None and sl_tijd is None:
++        regels.append("TP noch SL alsnog geraakt")
++    elif tp_tijd is not None and (sl_tijd is None or tp_tijd <= sl_tijd):
++        regels.append(f"TP zou geraakt zijn om {tp_tijd:%H:%M}" + (f" (SL {sl_tijd:%H:%M})" if sl_tijd else ""))
++    else:
++        regels.append(f"SL zou geraakt zijn om {sl_tijd:%H:%M}" + (f" (TP {tp_tijd:%H:%M})" if tp_tijd else ""))
++    return "\n".join(regels)
++
++
+ def genereer_trade_grafiek(
+     symbol: str,
+     candles: list,
+@@ -115,6 +144,15 @@ def genereer_trade_grafiek(
+         if entry_time is not None and exit_time is not None and exit_time > entry_time:
+             ax.axvspan(entry_time, exit_time, color="#ffd166", alpha=0.10, zorder=1, label="In positie")
+ 
++        # NIEUW (9 sep 2026, op verzoek): NABELOOP -- als er candles NA de
++        # uitstap zijn (einde-dag-grafiek), laten zien wat de koers daarna
++        # deed: was TP of SL alsnog geraakt, en hoe laat? Dat is de
++        # informatie om te beoordelen of de tijdslimiet ruimer moet.
++        nabeloop = _nabeloop_na_uitstap(candles, exit_time, direction, take_profit, stop_loss)
++        if nabeloop:
++            ax.text(0.99, 0.02, nabeloop, transform=ax.transAxes, ha="right", va="bottom", fontsize=9,
++                    bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="#888888", alpha=0.9))
++
+         # Take-profit en stop-loss
+         tp_kleur = "#06d6a0"
+         sl_kleur = "#ef476f"
+@@ -135,7 +173,7 @@ def genereer_trade_grafiek(
+         resultaat_label = {
+             "take_profit_hit": "TP geraakt", "stop_loss_hit": "SL geraakt",
+             "forced_close_90min": "Geforceerd gesloten (90 min)",
+-        }.get(result, result)
++        }.get(result, "Geforceerd gesloten (tijdslimiet)" if str(result).startswith("forced_close") else result)
+ 
+         ax.set_title(f"{symbol} {richting_pijl} — {resultaat_label}", fontsize=13, fontweight="bold")
+         ax.set_xlabel("Tijd")
+diff --git a/vul_grafieken_aan.py b/vul_grafieken_aan.py
+index 96b493f..4e5c565 100644
+--- a/vul_grafieken_aan.py
++++ b/vul_grafieken_aan.py
+@@ -19,6 +19,13 @@ Gebruik:
+     cd /opt/strategy && python3 vul_grafieken_aan.py            # alleen vandaag, alleen rijen zonder grafiek
+     cd /opt/strategy && python3 vul_grafieken_aan.py --alles    # hele journal
+     cd /opt/strategy && python3 vul_grafieken_aan.py --opnieuw  # bestaande grafieken van vandaag opnieuw maken
++    cd /opt/strategy && python3 vul_grafieken_aan.py --einde-dag # (cron, na beurssluiting) alle trades van
++                                                                 # vandaag opnieuw met het HELE dagverloop +
++                                                                 # nabeloop-tekst (TP/SL alsnog geraakt?)
++
++OCA-groep/strategie (9 sep 2026): worden voor oude rijen teruggehaald uit
++de proceslogs ("Positie verwijderd: SYM (OCA)"); anders gereconstrueerd
++uit het naampatroon {PREFIX}_{SYM}_{RICHTING}_{entry*100}.
+ """
+ import json
+ import csv
+@@ -81,6 +88,38 @@ def tijden_uit_events(symbool, datum, volgnummer=0):
+     return instap, uitstap
+ 
+ 
++def oca_uit_logs(symbool, datum):
++    patroon = re.compile(re.escape(datum) + r"[^\n]*Positie verwijderd: " + re.escape(symbool) + r" \(([A-Z]+_[^)]+)\)")
++    for pad in glob.glob("/opt/strategy/logs/*.log"):
++        try:
++            m = patroon.search(open(pad, encoding="utf-8", errors="ignore").read())
++        except Exception:
++            continue
++        if m:
++            return m.group(1)
++    return None
++
++
++def vul_oca_en_strategie(rij):
++    """Vult oca_group en strategy als ze leeg zijn. Retourneert True bij wijziging."""
++    if rij.get("oca_group") and rij.get("strategy"):
++        return False
++    symbool, datum = rij["symbol"], rij["date"]
++    oca = rij.get("oca_group") or oca_uit_logs(symbool, datum)
++    if not oca:
++        direction = rij.get("direction") or ("SHORT" if float(rij["stop_loss"]) > float(rij["entry_price"]) else "LONG")
++        prefix = "QFS" if box_uit_logs(symbool, datum) else "TTS"
++        oca = f"{prefix}_{symbool}_{direction}_{int(float(rij['entry_price']) * 100)}"
++    gewijzigd = False
++    if not rij.get("oca_group"):
++        rij["oca_group"] = oca
++        gewijzigd = True
++    if not rij.get("strategy"):
++        rij["strategy"] = oca.split("_", 1)[0]
++        gewijzigd = True
++    return gewijzigd
++
++
+ def maak_grafiek(rij, volgnummer=0):
+     from data_module import get_historical_candles
+     from chart_module import genereer_trade_grafiek
+@@ -132,7 +171,8 @@ def maak_grafiek(rij, volgnummer=0):
+ 
+ def main():
+     alles = "--alles" in sys.argv
+-    opnieuw = "--opnieuw" in sys.argv
++    einde_dag = "--einde-dag" in sys.argv
++    opnieuw = "--opnieuw" in sys.argv or einde_dag
+     vandaag = datetime.now().date().isoformat()
+     teller = {}  # (symbool, datum) -> hoeveelste trade op die dag
+     with open(JOURNAL, newline="") as f:
+@@ -148,6 +188,9 @@ def main():
+         teller[sleutel] = volgnummer + 1
+         if not alles and rij["date"] != vandaag:
+             continue
++        if "oca_group" in velden and vul_oca_en_strategie(rij):
++            print(f"  {rij['symbol']} {rij['date']}: OCA/strategie aangevuld ({rij['oca_group']})")
++            gewijzigd += 1
+         if rij.get("chart") and not opnieuw:
+             continue
+         naam = None if opnieuw else bestaande_png(rij["symbol"], rij["date"])
