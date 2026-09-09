@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, time as dt_time
 from typing import Optional
 
 from data_module import get_historical_candles, Candle
+from telegram_notify import log_decision
 from reversal_pattern_module import (
     check_engulfing_signal, check_hamer_setup, check_hamer_confirmation, ReversalSignal,
 )
@@ -133,6 +134,8 @@ def wait_for_reversal_signal(symbol: str, box_high: float, box_low: float,
         f"{symbol}: bewaking gestart voor omkeerpatroon ({expected_direction} verwacht, "
         f"box=[{box_low:.2f}, {box_high:.2f}], deadline={deadline})"
     )
+    log_decision(f"👀 {symbol}: bewaking gestart -- {expected_direction} verwacht, box {box_low:.2f}–{box_high:.2f}, tot {deadline}",
+                 strategy="QFS", symbol=symbol)
 
     while datetime.now().time() < deadline:
         try:
@@ -184,9 +187,13 @@ def wait_for_reversal_signal(symbol: str, box_high: float, box_low: float,
                     )
                     _schrijf_monitor_status(symbol, box_high, box_low, expected_direction, deadline,
                                               definitief_gesloten_candles, "bevestigd", laatste_signaal=signaal)
+                    log_decision(f"✅ {symbol}: hamer BEVESTIGD ({signaal.pattern_type}) -- trigger {signaal.trigger_price:.2f}, SL {signaal.stop_loss_price:.2f}",
+                                 strategy="QFS", symbol=symbol)
                     return signaal
                 else:
                     logger.info(f"{symbol}: hamer-opstelling NIET bevestigd (geen break) -- opstelling vervalt.")
+                    log_decision(f"↩️ {symbol}: hamer-opstelling niet bevestigd (geen break) -- vervalt, bewaking loopt door",
+                                 strategy="QFS", symbol=symbol)
                     wachtende_hamer_candle = None
                     # Val door naar STAP B: deze candle kan zelf ook weer
                     # een NIEUWE opstelling of engulfing-patroon vormen.
@@ -205,6 +212,8 @@ def wait_for_reversal_signal(symbol: str, box_high: float, box_low: float,
                     )
                     _schrijf_monitor_status(symbol, box_high, box_low, expected_direction, deadline,
                                               definitief_gesloten_candles, "bevestigd", laatste_signaal=engulfing_signaal)
+                    log_decision(f"✅ {symbol}: omkeerpatroon gevonden ({engulfing_signaal.pattern_type}) -- trigger {engulfing_signaal.trigger_price:.2f}, SL {engulfing_signaal.stop_loss_price:.2f}",
+                                 strategy="QFS", symbol=symbol)
                     return engulfing_signaal
 
                 if check_hamer_setup(vorige_candle, candle, box_high=box_high, box_low=box_low,
@@ -214,6 +223,8 @@ def wait_for_reversal_signal(symbol: str, box_high: float, box_low: float,
                         f"wacht op bevestiging door de volgende candle."
                     )
                     wachtende_hamer_candle = candle
+                    log_decision(f"🕯️ {symbol}: hamer-opstelling gezien op candle {candle.timestamp:%H:%M} -- wacht op bevestiging door volgende candle",
+                                 strategy="QFS", symbol=symbol)
 
             vorige_candle = candle
 
@@ -226,6 +237,7 @@ def wait_for_reversal_signal(symbol: str, box_high: float, box_low: float,
         time.sleep(poll_interval_seconds)
 
     logger.info(f"{symbol}: deadline ({deadline}) bereikt zonder geldig omkeerpatroon -- geen trade vandaag.")
+    log_decision(f"⌛ {symbol}: deadline {deadline} bereikt zonder bevestigd omkeerpatroon -- geen trade", strategy="QFS", symbol=symbol)
     _schrijf_monitor_status(symbol, box_high, box_low, expected_direction, deadline, [], "verlopen")
     return None
 

@@ -546,12 +546,24 @@ def report_trade_outcome(spec: BracketOrderSpec, symbol: str, outcome: dict, ent
         # OPGESLAGEN prijzen (used_entry_price/exit_price) waren al
         # correct exact-voorkeurend -- alleen het LABEL loog altijd.
         journal_pnl_note = "exacte fill-prijzen" if prices_are_exact else "benadering o.b.v. beoogde prijzen (fill niet volledig opgehaald)"
+        # NIEUW (9 sep 2026): de dashboard-kolommen (strategy, tijden,
+        # exit_price, netto-PnL, fees, chart) daadwerkelijk vullen -- de
+        # kolommen bestonden al, maar werden hier nog niet meegegeven.
+        entry_time = outcome.get("entry_time")
+        grafiek = _maak_trade_grafiek(spec, symbol, direction, result, used_entry_price, exit_price, entry_time)
         log_trade({
             "symbol": symbol, "direction": direction,
             "entry_price": used_entry_price, "take_profit": spec.take_profit,
             "stop_loss": spec.stop_loss, "quantity": spec.quantity,
             "result": result, "pnl_estimate": pnl,
             "pnl_note": journal_pnl_note,
+            "strategy": _strategie_van(spec),
+            "entry_time": entry_time.strftime("%H:%M:%S") if hasattr(entry_time, "strftime") else "",
+            "exit_time": datetime.now().strftime("%H:%M:%S"),
+            "exit_price": exit_price if exit_price is not None else "",
+            "pnl_net": pnl_net if pnl_net is not None else "",
+            "fees": fees_totaal if fees_totaal is not None else "",
+            "oca_group": spec.oca_group, "chart": grafiek,
         })
     except Exception as e:
         logger.error(f"Kon trade niet loggen in journal voor {symbol}: {e}")
@@ -596,6 +608,18 @@ def report_trade_outcome(spec: BracketOrderSpec, symbol: str, outcome: dict, ent
         logger.error(f"Kon positie niet verwijderen uit state voor {symbol}: {e}")
 
 
+# NIEUW (9 sep 2026, dashboard): elk standalone trade-proces beheert
+# precies één trade, dus de strategie/het symbool van die trade kan als
+# proces-brede context worden onthouden -- zo krijgt elke melding uit
+# de order-flow automatisch een strategie-label op het dashboard,
+# zonder dat alle _notify_safe()-aanroepen aangepast hoeven te worden.
+_MELDING_CONTEXT = {"strategy": "", "symbol": ""}
+
+
+def _strategie_van(spec: "BracketOrderSpec") -> str:
+    return spec.strategy or (spec.oca_group.split("_", 1)[0] if spec.oca_group else "TTS")
+
+
 def _notify_safe(message: str) -> None:
     """
     Fail-safe wrapper om send_telegram_message() -- een mislukte
@@ -605,9 +629,45 @@ def _notify_safe(message: str) -> None:
     """
     try:
         from telegram_notify import send_telegram_message
-        send_telegram_message(message)
+        send_telegram_message(message, strategy=_MELDING_CONTEXT["strategy"], symbol=_MELDING_CONTEXT["symbol"])
     except Exception as e:
         logger.error(f"Kon Telegram-melding niet versturen: {e}")
+
+
+def _maak_trade_grafiek(spec: "BracketOrderSpec", symbol: str, direction: str, result: str,
+                        entry_price: float, exit_price, entry_time) -> str:
+    """
+    NIEUW (9 sep 2026, op verzoek): direct na het afronden van een trade
+    de grafiek maken (chart_module.py) en de BESTANDSNAAM teruggeven,
+    zodat die in de journal-kolom `chart` komt en het dashboard hem bij
+    de trade toont. Centraal hier i.p.v. per standalone-script, zodat
+    TTS, QFS, RVB én VDB dezelfde grafiek krijgen. Faalt stil ("").
+    """
+    try:
+        from datetime import datetime as _dt
+        from chart_module import genereer_trade_grafiek
+        from data_module import get_historical_candles
+        candles = get_historical_candles(symbol, duration="1d", bar_size="5min")
+        vandaag = [c for c in candles if c.timestamp.date() == _dt.now().date()]
+        if not vandaag:
+            logger.warning(f"{symbol}: geen candles van vandaag voor de grafiek.")
+            return ""
+        lo = min(c.low for c in vandaag) if hasattr(vandaag[0], "low") else min(c.close for c in vandaag)
+        hi = max(c.high for c in vandaag) if hasattr(vandaag[0], "high") else max(c.close for c in vandaag)
+        box_high = spec.box_high if spec.box_high is not None else hi
+        box_low = spec.box_low if spec.box_low is not None else lo
+        pad = genereer_trade_grafiek(
+            symbol=symbol, candles=vandaag, box_high=box_high, box_low=box_low,
+            entry_price=entry_price, take_profit=spec.take_profit, stop_loss=spec.stop_loss,
+            exit_price=exit_price, direction=direction, result=result, entry_time=entry_time,
+        )
+        if not pad:
+            return ""
+        logger.info(f"{symbol}: trade-grafiek opgeslagen: {pad}")
+        return os.path.basename(pad)
+    except Exception as e:
+        logger.error(f"{symbol}: kon trade-grafiek niet maken (niet kritiek): {e}")
+        return ""
 
 
 def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_minutes: float = None,
@@ -624,6 +684,8 @@ def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_min
     een apart proces per open positie, in plaats van main.py zelf te
     laten wachten. Dit ontwerp-punt is nog niet opgelost.
     """
+    _MELDING_CONTEXT["strategy"] = _strategie_van(spec)
+    _MELDING_CONTEXT["symbol"] = symbol
     entry_result = place_entry_order(spec, symbol)
     if "error" in entry_result:
         _notify_safe(f"❌ {symbol}: entry-order plaatsen mislukt -- {entry_result['error']}")

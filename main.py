@@ -196,6 +196,35 @@ def run_symbol_cycle(symbol: str, capital: float, dry_run: bool) -> dict:
     return {"status": "trade_dispatched", "symbol": symbol, "reason": spec.reason}
 
 
+def _log_cyclus_beslissing(tekst: str) -> None:
+    try:
+        from telegram_notify import log_decision
+        log_decision(tekst, strategy="TTS+QFS")
+    except Exception as e:
+        logger.error(f"Kon cyclus-beslissing niet loggen: {e}")
+
+
+def _log_scan_beslissing(symbol: str, strategie: str, resultaat: dict) -> None:
+    """Zet een scan-uitkomst om in één leesbare beslissingsregel (events.jsonl)."""
+    try:
+        from telegram_notify import log_decision
+        status = resultaat.get("status", "")
+        reden = resultaat.get("reason") or ""
+        if status == "trade_dispatched":
+            tekst = f"🎯 {symbol}: setup gevonden, trade-proces gestart. {reden}"
+        elif status == "dispatched":
+            tekst = f"👀 {symbol}: box geldig, bewaking op omkeerpatroon gestart. {reden}"
+        elif status == "dry_run_complete":
+            tekst = f"🧪 {symbol}: [dry-run] setup gevonden, geen order geplaatst."
+        elif status == "error":
+            tekst = f"⚠️ {symbol}: fout tijdens scan -- {reden}"
+        else:
+            tekst = f"⏭️ {symbol}: overgeslagen -- {reden or status}"
+        log_decision(tekst.strip(), strategy=strategie, symbol=symbol)
+    except Exception as e:
+        logger.error(f"Kon scan-beslissing niet loggen voor {symbol}: {e}")
+
+
 def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) -> dict:
     """
     Voert één volledige cyclus uit: kiest tot `max_trades` verschillende
@@ -240,6 +269,7 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     if not state["trading_enabled"]:
         reason = "Trading staat gepauzeerd (via /stop_trading) -- cyclus overgeslagen."
         logger.warning(reason)
+        _log_cyclus_beslissing(f"⏸️ {reason}")
         return {"status": "skipped", "reason": reason}
 
     # Circuit breakers (VIX + 3%-dagstop) -- alleen zinvol in live-modus,
@@ -257,6 +287,7 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
         breaker_result = check_circuit_breakers(capital=totaal_referentie)
         if not breaker_result["safe_to_trade"]:
             logger.warning(f"Circuit breaker actief: {breaker_result['reason']}")
+            _log_cyclus_beslissing(f"🛑 Circuit breaker actief -- {breaker_result['reason']}")
             return {"status": "circuit_breaker_triggered", "reason": breaker_result["reason"]}
 
         # KRITIEKE FIX (22 aug 2026): de VIX-gebaseerde glijdende-schaal-
@@ -338,9 +369,14 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
                 else:
                     resultaat = await asyncio.to_thread(run_reversal_symbol_cycle, symbol, strategie_saldi["QFS"], dry_run)
                 resultaat["strategie"] = strategie
+                # NIEUW (9 sep 2026): elke uitkomst van de scan als
+                # BESLISSING op het dashboard -- één centrale plek voor
+                # TTS én QFS, i.p.v. bij elke afzonderlijke return.
+                _log_scan_beslissing(symbol, strategie, resultaat)
                 return resultaat
             except Exception as e:
                 logger.error(f"Onverwachte fout bij {symbol} ({strategie}): {e}")
+                _log_scan_beslissing(symbol, strategie, {"status": "error", "reason": str(e)})
                 return {"status": "error", "symbol": symbol, "strategie": strategie, "reason": str(e)}
 
     async def _run_all_symbols():
@@ -371,6 +407,7 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     # de OUDE (Fibonacci-gebaseerde) flow in run_symbol_cycle().
     executed = [r for r in results if r["status"] in ("dry_run_complete", "trade_complete", "trade_dispatched", "dispatched")]
     logger.info(f"=== Cyclus afgerond: {len(executed)}/{len(taken_lijst)} trades uitgevoerd (TTS + QFS samen) ===")
+    _log_cyclus_beslissing(f"🏁 Scan afgerond: {len(taken_lijst)} scans (TTS + QFS), {len(executed)} setup(s) doorgezet naar een trade-/bewakingsproces.")
 
     # NIEUW (3 sep 2026, op verzoek): één samenvattend Telegram-bericht
     # met ALLE vandaag gekwalificeerde aandelen (manipulatie-candle

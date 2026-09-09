@@ -100,22 +100,42 @@ def classify_level(text: str) -> str:
     return "info"
 
 
-def log_event(level: str, text: str, sent_to_telegram: bool = False) -> None:
+def log_event(level: str, text: str, sent_to_telegram: bool = False,
+              strategy: str = "", symbol: str = "") -> None:
     """Schrijft één regel naar logs/events.jsonl -- nooit ge-raised."""
     import json
     from datetime import datetime
     try:
         os.makedirs(os.path.dirname(EVENT_LOG_PATH), exist_ok=True)
+        rij = {
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "level": level, "text": text, "telegram": sent_to_telegram,
+        }
+        if strategy:
+            rij["strategy"] = strategy
+        if symbol:
+            rij["symbol"] = symbol
         with open(EVENT_LOG_PATH, "a") as f:
-            f.write(json.dumps({
-                "time": datetime.now().isoformat(timespec="seconds"),
-                "level": level, "text": text, "telegram": sent_to_telegram,
-            }, ensure_ascii=False) + "\n")
+            f.write(json.dumps(rij, ensure_ascii=False) + "\n")
     except Exception as e:
         logger.error(f"Kon gebeurtenis niet loggen: {e}")
 
 
-def send_telegram_message(text: str, parse_mode: str = None, urgent: bool = False) -> bool:
+def log_decision(text: str, strategy: str = "", symbol: str = "") -> None:
+    """
+    NIEUW (9 sep 2026, op verzoek): BESLISSINGEN van de bot vastleggen
+    in dezelfde gebeurtenissenlog als de meldingen, met niveau
+    "decision" -- nooit naar Telegram, altijd op het dashboard. Bedoeld
+    voor elke stap waarop de bot iets kiest of afwijst: symbool
+    overgeslagen (waarom), box gevonden, hamer-opstelling wacht op
+    bevestiging, patroon bevestigd/vervallen, trade gedispatcht, enz.
+    Zo is per dag terug te lezen WAAROM er wel/niet gehandeld is.
+    """
+    log_event("decision", text, sent_to_telegram=False, strategy=strategy, symbol=symbol)
+
+
+def send_telegram_message(text: str, parse_mode: str = None, urgent: bool = False,
+                          strategy: str = "", symbol: str = "") -> bool:
     """
     Routeert een melding: logt hem ALTIJD in de gebeurtenissenlog en
     verstuurt hem alleen naar Telegram als het niveau dat rechtvaardigt
@@ -134,12 +154,12 @@ def send_telegram_message(text: str, parse_mode: str = None, urgent: bool = Fals
         or drempel == "all"
     )
     if not naar_telegram:
-        log_event(level, text, sent_to_telegram=False)
+        log_event(level, text, sent_to_telegram=False, strategy=strategy, symbol=symbol)
         logger.info(f"Melding ({level}) alleen gelogd, niet naar Telegram: {text[:80]}")
         return False
 
     verstuurd = _send_raw(text, parse_mode)
-    log_event(level, text, sent_to_telegram=verstuurd)
+    log_event(level, text, sent_to_telegram=verstuurd, strategy=strategy, symbol=symbol)
     return verstuurd
 
 

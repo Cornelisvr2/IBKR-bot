@@ -244,7 +244,7 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
         "signals_skipped": [s for s in signals if s.get("status") == "skipped"],
         "vix": load_vix_report(iso),
         "events": events,
-        "event_counts": {lvl: sum(1 for e in events if e.get("level") == lvl) for lvl in ("urgent", "warning", "info")},
+        "event_counts": {lvl: sum(1 for e in events if e.get("level") == lvl) for lvl in ("urgent", "warning", "info", "decision")},
         "prev_date": prev_days[-1] if prev_days else None, "next_date": next_days[0] if next_days else None,
         "generated_at": datetime.now().strftime("%H:%M"),
     }
@@ -278,18 +278,20 @@ header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
 .events{margin-top:26px}.events h2{font-size:16px;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline}.events .counts{font-size:12px;color:var(--ink-3);font-weight:400}
 .events ol{list-style:none;margin:0;padding:0;background:var(--sheet);border:1px solid var(--rule);border-radius:10px;overflow:hidden}.events li{display:grid;grid-template-columns:52px 74px 1fr 70px;gap:12px;padding:8px 14px;border-top:1px solid var(--rule);font-size:13px;align-items:baseline}.events li:first-child{border-top:0}
 .events .lvl{font-weight:600;font-size:12px}.events li.urgent .lvl{color:var(--loss)}.events li.warning .lvl{color:#b7791f}.events li.info .lvl{color:var(--ink-3)}.events li.urgent{background:#fdf3f2}.events .txt{white-space:pre-wrap;color:var(--ink-2)}.events li.urgent .txt{color:var(--ink)}.events .tg{font-size:12px;color:var(--ink-3);text-align:right}
-.events li.info.hidden{display:none}
+.events li.hidden{display:none}.events li{grid-template-columns:52px 62px 48px 1fr 70px}.events .strat{font-size:11px;font-weight:600;color:var(--ink-3);letter-spacing:.02em}.events li.decision .lvl{color:#2b6cb0}.events li.decision .txt{color:var(--ink-2)}.ev-filters button{font:inherit;font-size:12px;padding:2px 8px;border:1px solid var(--rule);border-radius:999px;background:var(--sheet);cursor:pointer;margin-left:4px}.ev-filters button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
 .footer{margin-top:30px;font-size:12px;color:var(--ink-3)}
-@media(max-width:720px){.scores{grid-template-columns:1fr}.events li{grid-template-columns:44px 64px 1fr}.events .tg{display:none}.trade summary{grid-template-columns:8px 46px 40px 56px 1fr 70px 20px}.t-result{display:none}.detail{grid-template-columns:1fr}}
+@media(max-width:720px){.scores{grid-template-columns:1fr}.events li{grid-template-columns:44px 56px 40px 1fr}.events .tg{display:none}.trade summary{grid-template-columns:8px 46px 40px 56px 1fr 70px 20px}.t-result{display:none}.detail{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.chev{transition:none}}
 """
 
 JS = """
-document.querySelectorAll('.filters button').forEach(b=>b.addEventListener('click',()=>{
-  document.querySelectorAll('.filters button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+document.querySelectorAll('.filters:not(.ev-filters) button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.filters:not(.ev-filters) button').forEach(x=>x.setAttribute('aria-pressed',x===b));
   const f=b.dataset.f;document.querySelectorAll('.trade').forEach(t=>{t.style.display=(f==='all'||t.classList.contains(f))?'':'none';});
 }));
-const tog=document.getElementById('toggle-info');if(tog){tog.addEventListener('click',()=>{const on=tog.getAttribute('aria-pressed')!=='true';tog.setAttribute('aria-pressed',on);document.querySelectorAll('.events li.info').forEach(l=>l.classList.toggle('hidden',!on));});}
+const evState={s:'',dec:true};function applyEv(){document.querySelectorAll('.events li').forEach(l=>{const okS=!evState.s||l.dataset.strategy===evState.s;const okD=evState.dec||!l.classList.contains('decision');l.classList.toggle('hidden',!(okS&&okD));});}
+document.querySelectorAll('.ev-filters .ev-f').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.ev-filters .ev-f').forEach(x=>x.setAttribute('aria-pressed',x===b));evState.s=b.dataset.s;applyEv();}));
+const togD=document.getElementById('toggle-decisions');if(togD){togD.addEventListener('click',()=>{evState.dec=togD.getAttribute('aria-pressed')!=='true';togD.setAttribute('aria-pressed',evState.dec);applyEv();});}
 """
 
 
@@ -390,18 +392,26 @@ def render(d: dict) -> str:
         for s in d["signals_skipped"])
     signals = f'<section class="signals"><h2>Signalen zonder trade ({len(d["signals_skipped"])})</h2><ul>{sig_items}</ul></section>' if sig_items else ""
 
-    LVL = {"urgent": "Urgent", "warning": "Let op", "info": "Info"}
-    order = {"urgent": 0, "warning": 1, "info": 2}
-    evs = sorted(d["events"], key=lambda ev: (order.get(ev.get("level"), 3), ev.get("time", "")))
+    LVL = {"urgent": "Urgent", "warning": "Let op", "info": "Info", "decision": "Besluit"}
+    # CHRONOLOGISCH (9 sep 2026, op verzoek): het logboek leest als het
+    # verhaal van de dag -- alle regels zichtbaar, incl. beslissingen.
+    # (Voorheen urgent-eerst en info standaard verborgen, waardoor een
+    # rustige dag ten onrechte leeg oogde.)
+    evs = sorted(d["events"], key=lambda ev: ev.get("time", ""))
+    strategieen_in_log = sorted({ev.get("strategy", "") for ev in evs if ev.get("strategy")})
     ev_items = "".join(
-        f'<li class="{e(ev.get("level", "info"))}{" hidden" if ev.get("level") == "info" else ""}"><span class="t-time">{e(ev.get("time", "")[11:16])}</span>'
-        f'<span class="lvl">{LVL.get(ev.get("level"), "Info")}</span><span class="txt">{e(ev.get("text", ""))}</span>'
+        f'<li class="{e(ev.get("level", "info"))}" data-strategy="{e(ev.get("strategy", ""))}"><span class="t-time">{e(ev.get("time", "")[11:16])}</span>'
+        f'<span class="lvl">{LVL.get(ev.get("level"), "Info")}</span>'
+        f'<span class="strat">{e(ev.get("strategy", ""))}</span>'
+        f'<span class="txt">{e(ev.get("text", ""))}</span>'
         f'<span class="tg">{"Telegram" if ev.get("telegram") else ""}</span></li>'
         for ev in evs)
     c = d["event_counts"]
-    events_html = (f'<section class="events"><h2>Meldingen <span class="counts">{c["urgent"]} urgent · {c["warning"]} let op · {c["info"]} info</span>'
-                   f'<div class="filters"><button type="button" id="toggle-info" aria-pressed="false">Toon info</button></div></h2><ol>{ev_items}</ol></section>'
-                   if evs else '<section class="events"><h2>Meldingen</h2><div class="empty">Geen meldingen op deze dag.</div></section>')
+    strat_knoppen = "".join(f'<button type="button" class="ev-f" data-s="{e(st)}" aria-pressed="false">{e(st)}</button>' for st in strategieen_in_log)
+    events_html = (f'<section class="events"><h2>Logboek van de dag <span class="counts">{c["urgent"]} urgent · {c["warning"]} let op · {c["info"]} info · {c["decision"]} besluiten</span>'
+                   f'<div class="filters ev-filters"><button type="button" class="ev-f" data-s="" aria-pressed="true">Alles</button>{strat_knoppen}'
+                   f'<button type="button" id="toggle-decisions" aria-pressed="true">Besluiten</button></div></h2><ol>{ev_items}</ol></section>'
+                   if evs else '<section class="events"><h2>Logboek van de dag</h2><div class="empty">Geen meldingen of beslissingen op deze dag.</div></section>')
 
     return f"""<!DOCTYPE html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dagrapport — {e(titel)}</title><style>{CSS}</style></head><body><div class="page">

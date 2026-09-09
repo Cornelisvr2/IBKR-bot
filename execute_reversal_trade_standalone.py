@@ -100,6 +100,8 @@ def main():
 
         if position_size * signaal.trigger_price < 5.0:
             logger.warning(f"{args.symbol}: positiewaarde te klein met €{args.capital:.2f} kapitaal -- geen trade.")
+            from telegram_notify import log_decision
+            log_decision(f"⏭️ {args.symbol}: patroon bevestigd maar positiewaarde te klein (€{args.capital:.2f} kapitaal) -- geen trade", strategy="QFS", symbol=args.symbol)
             return
 
         spec = BracketOrderSpec(
@@ -115,6 +117,7 @@ def main():
                 f"SL {signaal.stop_loss_price:.2f} (structuur), risico €{risk_amount:.2f}"
                 + (" [GELIMITEERD door max-positiewaarde]" if capped else "")
             ),
+            strategy="QFS", box_high=args.box_high, box_low=args.box_low,
         )
 
         logger.info(f"Omkeerpatroon bevestigd voor {args.symbol}: {spec.reason} -- trade wordt nu geplaatst.")
