@@ -1,0 +1,189 @@
+diff --git a/dispatch_guard.py b/dispatch_guard.py
+new file mode 100644
+index 0000000..51d4bcc
+--- /dev/null
++++ b/dispatch_guard.py
+@@ -0,0 +1,74 @@
++"""
++dispatch_guard.py -- bewaakt het starten van losgekoppelde trade-processen.
++
++NIEUW (9 sep 2026): op 9 sep bleken negen TTS-setups binnen een seconde
++te sterven op een argparse-fout in een overschreven standalone-script,
++zonder dat iemand dat zag -- geen order, geen melding, lege dag. Elk
++trade-/bewakingsproces hoort minuten tot uren te draaien; eindigt het
++binnen een paar seconden, dan is er iets grondig mis. Deze helper start
++het proces, wacht even, en stuurt bij een vroegtijdig einde een URGENTE
++melding (naar Telegram) met de laatste regels van de dispatch-log.
++"""
++import logging
++import os
++import subprocess
++
++logger = logging.getLogger(__name__)
++
++WACHT_SECONDEN = 3.0
++
++
++def _staart(log_path: str, n: int = 4) -> str:
++    try:
++        with open(log_path, encoding="utf-8", errors="ignore") as f:
++            regels = [r.rstrip() for r in f.read().splitlines() if r.strip()]
++        return "\n".join(regels[-n:])
++    except Exception:
++        return "(dispatch-log niet leesbaar)"
++
++
++def start_bewaakt(cmd: list[str], symbol: str, strategie: str, log_path: str | None = None,
++                  cwd: str | None = None) -> subprocess.Popen:
++    """
++    Start `cmd` losgekoppeld (start_new_session) met stdout/stderr naar
++    `log_path` (standaard logs/dispatch_<STRATEGIE>_<SYMBOOL>.log). Als het
++    proces binnen WACHT_SECONDEN al is geëindigd, gaat er een urgente
++    melding uit -- ongeacht de exitcode, want ook exit 0 is hier fout.
++    Geeft het Popen-object terug; gooit nooit een exception richting de
++    aanroeper (de scan moet altijd doorgaan met het volgende symbool).
++    """
++    if log_path is None:
++        log_path = f"/opt/strategy/logs/dispatch_{strategie}_{symbol}.log"
++    os.makedirs(os.path.dirname(log_path), exist_ok=True)
++    log_file = open(log_path, "a")
++    try:
++        proc = subprocess.Popen(cmd, cwd=cwd, stdout=log_file, stderr=subprocess.STDOUT,
++                                start_new_session=True)
++    except Exception as e:
++        log_file.close()
++        _urgent(f"🚨 {strategie} {symbol}: trade-proces kon NIET gestart worden -- {e}", strategie, symbol)
++        raise
++    finally:
++        pass
++    try:
++        code = proc.wait(timeout=WACHT_SECONDEN)
++    except subprocess.TimeoutExpired:
++        code = None  # draait nog: goed
++    log_file.close()
++    if code is not None:
++        _urgent(
++            f"🚨 {strategie} {symbol}: trade-proces is binnen {WACHT_SECONDEN:.0f}s gestopt "
++            f"(exitcode {code}) -- er is GEEN order geplaatst. Laatste regels uit "
++            f"{os.path.basename(log_path)}:\n{_staart(log_path)}",
++            strategie, symbol,
++        )
++    return proc
++
++
++def _urgent(tekst: str, strategie: str, symbol: str) -> None:
++    logger.error(tekst.replace("\n", " | "))
++    try:
++        from telegram_notify import send_telegram_message
++        send_telegram_message(tekst, urgent=True, strategy=strategie, symbol=symbol)
++    except Exception as e:
++        logger.error(f"Kon urgente dispatch-melding niet versturen: {e}")
+diff --git a/main.py b/main.py
+index a2b507c..a23e8cd 100644
+--- a/main.py
++++ b/main.py
+@@ -173,24 +173,21 @@ def run_symbol_cycle(symbol: str, capital: float, dry_run: bool) -> dict:
+     # TP/SL), wat de cron-job (en daarmee de volgende cron-slot, via
+     # de flock-vergrendeling in run_cycle.sh) zou blokkeren. Dit proces
+     # overleeft het einde van main.py dankzij start_new_session=True.
+-    import subprocess
+-
+-    log_path = f"/opt/strategy/logs/dispatch_{symbol}.log"
+-    with open(log_path, "a") as log_file:
+-        subprocess.Popen(
+-            [
+-                "python3", "/opt/strategy/execute_trade_standalone.py",
+-                "--symbol", symbol,
+-                "--action", spec.action,
+-                "--quantity", str(spec.quantity),
+-                "--entry-price", str(spec.entry_price),
+-                "--take-profit", str(spec.take_profit),
+-                "--stop-loss", str(spec.stop_loss),
+-                "--oca-group", spec.oca_group,
+-            ],
+-            stdout=log_file, stderr=subprocess.STDOUT,
+-            start_new_session=True,  # loskoppelen van deze process-groep
+-        )
++    from dispatch_guard import start_bewaakt
++
++    start_bewaakt(
++        [
++            "python3", "/opt/strategy/execute_trade_standalone.py",
++            "--symbol", symbol,
++            "--action", spec.action,
++            "--quantity", str(spec.quantity),
++            "--entry-price", str(spec.entry_price),
++            "--take-profit", str(spec.take_profit),
++            "--stop-loss", str(spec.stop_loss),
++            "--oca-group", spec.oca_group,
++        ],
++        symbol=symbol, strategie="TTS", log_path=f"/opt/strategy/logs/dispatch_{symbol}.log",
++    )
+ 
+     logger.info(f"Trade voor {symbol} gedispatcht naar losgekoppeld proces.")
+     return {"status": "trade_dispatched", "symbol": symbol, "reason": spec.reason}
+diff --git a/reversal_strategy_module.py b/reversal_strategy_module.py
+index 2c00d62..bf45f66 100644
+--- a/reversal_strategy_module.py
++++ b/reversal_strategy_module.py
+@@ -188,20 +188,18 @@ def run_reversal_symbol_cycle(symbol: str, capital: float, dry_run: bool) -> dic
+     # ZOWEL de bewaking ALS de trade-uitvoering uit, i.p.v. alleen de
+     # laatste stap zoals bij de oude flow.
+     import subprocess
+-    log_path = f"/opt/strategy/logs/dispatch_reversal_{symbol}.log"
+-    with open(log_path, "a") as log_file:
+-        subprocess.Popen(
+-            [
+-                "python3", "/opt/strategy/execute_reversal_trade_standalone.py",
+-                "--symbol", symbol,
+-                "--box-high", str(box_high),
+-                "--box-low", str(box_low),
+-                "--direction", expected_direction,
+-                "--capital", str(capital),
+-            ],
+-            stdout=log_file, stderr=subprocess.STDOUT,
+-            start_new_session=True,
+-        )
++    from dispatch_guard import start_bewaakt
++    start_bewaakt(
++        [
++            "python3", "/opt/strategy/execute_reversal_trade_standalone.py",
++            "--symbol", symbol,
++            "--box-high", str(box_high),
++            "--box-low", str(box_low),
++            "--direction", expected_direction,
++            "--capital", str(capital),
++        ],
++        symbol=symbol, strategie="QFS", log_path=f"/opt/strategy/logs/dispatch_reversal_{symbol}.log",
++    )
+     logger.info(f"Reversal-bewaking + trade voor {symbol} gedispatcht naar losgekoppeld proces.")
+     return {"status": "dispatched", "symbol": symbol, "direction": expected_direction}
+ 
+diff --git a/rvb_scan.py b/rvb_scan.py
+index 3e1d3fa..9197df5 100644
+--- a/rvb_scan.py
++++ b/rvb_scan.py
+@@ -110,8 +110,8 @@ def dispatch_trade(trade: dict, signal_info: dict, dry_run: bool) -> None:
+     if dry_run:
+         logger.info(f"[DRY-RUN] zou starten: {' '.join(cmd)}")
+         return
+-    subprocess.Popen(cmd, cwd=STRATEGY_DIR, start_new_session=True,
+-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++    from dispatch_guard import start_bewaakt
++    start_bewaakt(cmd, symbol=trade["symbol"], strategie="RVB", cwd=STRATEGY_DIR)
+     logger.info(f"Losgekoppeld RVB-tradeproces gestart voor {trade['symbol']}.")
+ 
+ 
+diff --git a/vwap_bounce_scan.py b/vwap_bounce_scan.py
+index 4901356..4696450 100644
+--- a/vwap_bounce_scan.py
++++ b/vwap_bounce_scan.py
+@@ -109,8 +109,8 @@ def dispatch_trade(trade: dict, signal_info: dict, dry_run: bool) -> None:
+     if dry_run:
+         logger.info(f"[DRY-RUN] zou starten: {' '.join(cmd)}")
+         return
+-    subprocess.Popen(cmd, cwd=STRATEGY_DIR, start_new_session=True,
+-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++    from dispatch_guard import start_bewaakt
++    start_bewaakt(cmd, symbol=trade["symbol"], strategie="VDB", cwd=STRATEGY_DIR)
+     logger.info(f"Losgekoppeld VDB-tradeproces gestart voor {trade['symbol']}.")
