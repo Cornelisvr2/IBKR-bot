@@ -173,24 +173,21 @@ def run_symbol_cycle(symbol: str, capital: float, dry_run: bool) -> dict:
     # TP/SL), wat de cron-job (en daarmee de volgende cron-slot, via
     # de flock-vergrendeling in run_cycle.sh) zou blokkeren. Dit proces
     # overleeft het einde van main.py dankzij start_new_session=True.
-    import subprocess
+    from dispatch_guard import start_bewaakt
 
-    log_path = f"/opt/strategy/logs/dispatch_{symbol}.log"
-    with open(log_path, "a") as log_file:
-        subprocess.Popen(
-            [
-                "python3", "/opt/strategy/execute_trade_standalone.py",
-                "--symbol", symbol,
-                "--action", spec.action,
-                "--quantity", str(spec.quantity),
-                "--entry-price", str(spec.entry_price),
-                "--take-profit", str(spec.take_profit),
-                "--stop-loss", str(spec.stop_loss),
-                "--oca-group", spec.oca_group,
-            ],
-            stdout=log_file, stderr=subprocess.STDOUT,
-            start_new_session=True,  # loskoppelen van deze process-groep
-        )
+    start_bewaakt(
+        [
+            "python3", "/opt/strategy/execute_trade_standalone.py",
+            "--symbol", symbol,
+            "--action", spec.action,
+            "--quantity", str(spec.quantity),
+            "--entry-price", str(spec.entry_price),
+            "--take-profit", str(spec.take_profit),
+            "--stop-loss", str(spec.stop_loss),
+            "--oca-group", spec.oca_group,
+        ],
+        symbol=symbol, strategie="TTS", log_path=f"/opt/strategy/logs/dispatch_{symbol}.log",
+    )
 
     logger.info(f"Trade voor {symbol} gedispatcht naar losgekoppeld proces.")
     return {"status": "trade_dispatched", "symbol": symbol, "reason": spec.reason}

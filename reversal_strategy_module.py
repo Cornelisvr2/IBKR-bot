@@ -188,20 +188,18 @@ def run_reversal_symbol_cycle(symbol: str, capital: float, dry_run: bool) -> dic
     # ZOWEL de bewaking ALS de trade-uitvoering uit, i.p.v. alleen de
     # laatste stap zoals bij de oude flow.
     import subprocess
-    log_path = f"/opt/strategy/logs/dispatch_reversal_{symbol}.log"
-    with open(log_path, "a") as log_file:
-        subprocess.Popen(
-            [
-                "python3", "/opt/strategy/execute_reversal_trade_standalone.py",
-                "--symbol", symbol,
-                "--box-high", str(box_high),
-                "--box-low", str(box_low),
-                "--direction", expected_direction,
-                "--capital", str(capital),
-            ],
-            stdout=log_file, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    from dispatch_guard import start_bewaakt
+    start_bewaakt(
+        [
+            "python3", "/opt/strategy/execute_reversal_trade_standalone.py",
+            "--symbol", symbol,
+            "--box-high", str(box_high),
+            "--box-low", str(box_low),
+            "--direction", expected_direction,
+            "--capital", str(capital),
+        ],
+        symbol=symbol, strategie="QFS", log_path=f"/opt/strategy/logs/dispatch_reversal_{symbol}.log",
+    )
     logger.info(f"Reversal-bewaking + trade voor {symbol} gedispatcht naar losgekoppeld proces.")
     return {"status": "dispatched", "symbol": symbol, "direction": expected_direction}
 

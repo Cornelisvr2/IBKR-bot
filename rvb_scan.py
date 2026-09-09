@@ -110,8 +110,8 @@ def dispatch_trade(trade: dict, signal_info: dict, dry_run: bool) -> None:
     if dry_run:
         logger.info(f"[DRY-RUN] zou starten: {' '.join(cmd)}")
         return
-    subprocess.Popen(cmd, cwd=STRATEGY_DIR, start_new_session=True,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    from dispatch_guard import start_bewaakt
+    start_bewaakt(cmd, symbol=trade["symbol"], strategie="RVB", cwd=STRATEGY_DIR)
     logger.info(f"Losgekoppeld RVB-tradeproces gestart voor {trade['symbol']}.")
 
 
