@@ -124,7 +124,7 @@ def fees_uit_events(symbool, datum, volgnummer=0):
     """(pnl_net, fees, exit_price) uit de resultaatmelding in events.jsonl, of (None, None, None)."""
     if not os.path.exists(EVENTS):
         return None, None, None
-    pat = re.compile(r"Exit ([\d.]+).*?€([+-]?[\d.,]+) netto \(na €([\d.,]+) fees\)")
+    pat = re.compile(r"Exit ([\d.]+).*?€([+-]?[\d.,]+) netto \(na €([\d.,]+) fees\)", re.DOTALL)
     hits = []
     with open(EVENTS) as f:
         for regel in f:
