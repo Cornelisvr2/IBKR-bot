@@ -1,0 +1,20 @@
+# Caddyfile.ibkr -- HTTPS voor het IBKR-dashboard, zelfde opzet als de HBAR-bot
+# (Caddy regelt het Let's Encrypt-certificaat en de verlenging automatisch).
+#
+# Hostnaam: vervang <VPS-IP> door het IP van deze VPS, met streepjes i.p.v.
+# punten, bv. ibkr.187-124-8-211.sslip.io. Heb je een eigen domein, zet dan
+# een A-record naar de VPS en gebruik die naam hier.
+#
+# Login: het dashboard toont handelsresultaten en staat op het open internet,
+# dus basic-auth staat standaard AAN. Wachtwoord-hash maken:
+#     caddy hash-password --plaintext 'jouw-wachtwoord'
+# en de uitkomst hieronder plakken. Wil je écht geen login (zoals bij de
+# HBAR-bot), haal dan het basic_auth-blok weg.
+
+ibkr.<VPS-IP>.sslip.io {
+    basic_auth {
+        cornelis $2a$14$VERVANG_DOOR_HASH_UIT_caddy_hash-password
+    }
+    encode gzip
+    reverse_proxy 127.0.0.1:8899
+}

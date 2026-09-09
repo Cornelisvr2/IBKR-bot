@@ -32,6 +32,7 @@ Gebruik in andere modules:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time
@@ -94,6 +95,12 @@ class BracketOrderSpec:
     stop_loss: float
     oca_group: str
     reason: str
+    # NIEUW (9 sep 2026, dashboard): optioneel, achterwaarts compatibel.
+    # strategy = "TTS"/"QFS"/"RVB" (leeg = afgeleid uit het OCA-prefix);
+    # box_high/box_low = openingsrange/box voor de grafiek (None = geen box).
+    strategy: str = ""
+    box_high: float | None = None
+    box_low: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -298,7 +305,8 @@ def place_exit_orders(spec: BracketOrderSpec, symbol: str, conid: int, account_i
     return {"tp_order_id": tp_order_id, "sl_order_id": sl_order_id}
 
 
-def monitor_oco_exit(tp_order_id: str | None, sl_order_id: str | None, account_id: str, max_wait_minutes: int = 480) -> dict:
+def monitor_oco_exit(tp_order_id: str | None, sl_order_id: str | None, account_id: str, max_wait_minutes: int = 480,
+                     forced_close_time: dt_time = None) -> dict:
     """
     Bewaakt de TP- en SL-order gelijktijdig (polling). Zodra de één
     vult, annuleert deze functie ACTIEF de andere -- dit is de kern
@@ -346,8 +354,14 @@ def monitor_oco_exit(tp_order_id: str | None, sl_order_id: str | None, account_i
         # trade een hele nacht blijft openstaan (zoals bij GOOGL op
         # 24 aug 2026 gebeurde). Bewuste keuze van de gebruiker: een
         # eventueel verlies op dit moment wordt geaccepteerd.
-        if datetime.now().time() >= FORCED_CLOSE_TIME:
-            logger.warning(f"Geforceerde sluiting (150-minuten-regel, {FORCED_CLOSE_TIME}) bereikt -- positie wordt nu gesloten ongeacht TP/SL-status.")
+        # NIEUW (9 sep 2026, RVB): het sluitingstijdstip is nu een
+        # parameter -- TTS/QFS houden de vaste 150-minuten-regel
+        # (FORCED_CLOSE_TIME, 18:00 CEST), RVB sluit pas vlak vóór het
+        # einde van de handelsdag (21:55 CEST). Zonder parameter blijft
+        # het oude gedrag exact hetzelfde.
+        _sluit_tijd = forced_close_time if forced_close_time is not None else FORCED_CLOSE_TIME
+        if datetime.now().time() >= _sluit_tijd:
+            logger.warning(f"Geforceerde sluiting ({_sluit_tijd}) bereikt -- positie wordt nu gesloten ongeacht TP/SL-status.")
             return {"result": "forced_close_90min", "tp_status": "closing", "sl_status": "closing"}
 
         tp_result = get_order_status(tp_order_id) if tp_order_id else {}
@@ -586,7 +600,8 @@ def _notify_safe(message: str) -> None:
         logger.error(f"Kon Telegram-melding niet versturen: {e}")
 
 
-def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_minutes: float = None) -> dict:
+def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_minutes: float = None,
+                          forced_close_time: dt_time = None) -> dict:
     """
     Orkestreert de volledige zelf-beheerde OCO-flow: entry plaatsen ->
     wachten op fill -> TP/SL plaatsen -> bewaken tot de één de ander
@@ -632,6 +647,8 @@ def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_min
     if fill_status != "Filled":
         _notify_safe(f"⏱️ {symbol}: entry niet gevuld binnen de tijdslimiet ({fill_status}) -- order geannuleerd.")
         return {"status": "entry_not_filled", "symbol": symbol, "fill_status": fill_status}
+
+    entry_filled_at = datetime.now()  # NIEUW (9 sep 2026): voor journal/grafiek
 
     # Positie registreren in state.json zodra de entry bevestigd is
     # gevuld -- zodat /status in de Telegram-bot deze trade toont
@@ -704,11 +721,13 @@ def execute_managed_trade(spec: BracketOrderSpec, symbol: str, max_fill_wait_min
     elif exit_result["sl_order_id"] is None:
         _notify_safe(f"⚠️ {symbol}: SL-order mislukt, alleen TP actief (order {exit_result['tp_order_id']}). URGENT: positie heeft geen stop-loss, controleer handmatig.")
 
-    outcome = monitor_oco_exit(exit_result["tp_order_id"], exit_result["sl_order_id"], account_id)
+    outcome = monitor_oco_exit(exit_result["tp_order_id"], exit_result["sl_order_id"], account_id,
+                               forced_close_time=forced_close_time)
     # Order-ID's toevoegen aan de outcome, zodat report_trade_outcome()
     # de exacte fill-prijs van de GERAAKTE exit-order kan opzoeken.
     outcome["tp_order_id_ref"] = exit_result["tp_order_id"]
     outcome["sl_order_id_ref"] = exit_result["sl_order_id"]
+    outcome["entry_time"] = entry_filled_at
 
     # KRITIEKE TOEVOEGING (25 aug 2026): geforceerde sluiting na de
     # 90-minuten-regel -- annuleer de openstaande TP/SL-orders en sluit

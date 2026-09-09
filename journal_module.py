@@ -40,7 +40,28 @@ FIELDNAMES = [
     "atr", "atr_ratio",
     "entry_price", "take_profit", "stop_loss", "quantity",
     "result", "pnl_estimate", "pnl_note",
+    # NIEUW (9 sep 2026, dashboard): per-strategie-rapportage vereist
+    # deze velden expliciet i.p.v. ze uit het OCA-prefix af te leiden.
+    "strategy", "entry_time", "exit_time", "exit_price",
+    "pnl_net", "fees", "oca_group", "chart",
 ]
+
+
+def _migrate_header_if_needed(path: str) -> None:
+    """Herschrijft het CSV-bestand als de header niet gelijk is aan FIELDNAMES (oude rijen krijgen lege nieuwe kolommen)."""
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames == FIELDNAMES:
+            return
+        rows = list(reader)
+    tmp = path + ".tmp"
+    with open(tmp, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: r.get(k, "") for k in FIELDNAMES})
+    os.replace(tmp, path)
+    logger.info(f"Journal-header gemigreerd naar {len(FIELDNAMES)} kolommen ({len(rows)} bestaande rijen behouden).")
 
 
 def log_trade(trade: dict, path: str = None) -> bool:
@@ -71,6 +92,12 @@ def log_trade(trade: dict, path: str = None) -> bool:
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         file_exists = os.path.exists(path)
+
+        # NIEUW (9 sep 2026): een bestaand journal met een OUDERE header
+        # (minder kolommen) wordt eenmalig herschreven met de nieuwe
+        # header -- anders schuiven nieuwe velden onder verkeerde kolommen.
+        if file_exists:
+            _migrate_header_if_needed(path)
 
         with open(path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=FIELDNAMES)

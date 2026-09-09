@@ -1,0 +1,20 @@
+# /etc/systemd/system/ibkr-dashboard.service
+# Dagrapport-dashboard TTS/QFS/RVB -- luistert alleen lokaal (127.0.0.1:8899),
+# Caddy zet er HTTPS + basic-auth voor (zie Caddyfile.ibkr).
+[Unit]
+Description=IBKR-bot dagrapport-dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/strategy
+EnvironmentFile=-/etc/environment
+ExecStart=/usr/bin/python3 /opt/strategy/dashboard_server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/strategy/logs/dashboard.log
+StandardError=append:/opt/strategy/logs/dashboard.log
+
+[Install]
+WantedBy=multi-user.target
