@@ -1,0 +1,479 @@
+diff --git a/dashboard_server.py b/dashboard_server.py
+index 40c566e..53e4d0e 100644
+--- a/dashboard_server.py
++++ b/dashboard_server.py
+@@ -12,7 +12,8 @@ Bronnen (alleen lezen):
+     logs/charts/*.png           -- grafieken (chart_module.py)
+     logs/rvb_signals.jsonl      -- RVB-signalen incl. overgeslagen (rvb_scan.py)
+     logs/vdb_signals.jsonl      -- VDB-signalen incl. overgeslagen (vwap_bounce_scan.py)
+-    state.json                  -- gesimuleerd saldo (state_module.py)
++    logs/vix_daily.jsonl        -- dagelijkse VIX-waarde (vix_daily_report.py)
++    state.json                  -- per-strategie gesimuleerde saldi (state_module.py)
+ 
+ Uitsluitend Python-stdlib (http.server), geen extra dependencies.
+ Luistert ALLEEN op 127.0.0.1:8899 -- Caddy (zie Caddyfile.ibkr) zet er
+@@ -49,6 +50,7 @@ JOURNAL_PATH = os.environ.get("TTS_JOURNAL_FILE", os.path.join(LOGS_DIR, "trade_
+ CHARTS_DIR = os.path.join(LOGS_DIR, "charts")
+ SIGNALS_PATH = os.environ.get("RVB_SIGNAL_LOG", os.path.join(LOGS_DIR, "rvb_signals.jsonl"))
+ VDB_SIGNALS_PATH = os.environ.get("VDB_SIGNAL_LOG", os.path.join(LOGS_DIR, "vdb_signals.jsonl"))
++VIX_REPORT_PATH = os.environ.get("VIX_REPORT_LOG", os.path.join(LOGS_DIR, "vix_daily.jsonl"))
+ STATE_PATH = os.environ.get("TTS_STATE_FILE", os.path.join(STRATEGY_DIR, "state.json"))
+ EVENTS_PATH = os.environ.get("EVENT_LOG_FILE", os.path.join(LOGS_DIR, "events.jsonl"))
+ HOST = os.environ.get("DASHBOARD_BIND", "127.0.0.1")   # 0.0.0.0 alleen in de Docker-Caddy-situatie, zie DASHBOARD_DEPLOY.md
+@@ -162,12 +164,40 @@ def load_events(day: str) -> list[dict]:
+     return out
+ 
+ 
+-def load_balance() -> float | None:
++def load_vix_report(day: str) -> dict | None:
++    """
++    Laatst bekende VIX-rapport van de gegeven dag (er kan er maar één
++    per dag zijn, via cron -- maar als het script ooit dubbel draait,
++    pakken we bewust de LAATSTE regel).
++    """
++    if not os.path.exists(VIX_REPORT_PATH):
++        return None
++    laatste = None
++    with open(VIX_REPORT_PATH) as f:
++        for line in f:
++            try:
++                r = json.loads(line)
++            except json.JSONDecodeError:
++                continue
++            if r.get("time", "").startswith(day):
++                laatste = r
++    return laatste
++
++
++def load_strategy_balances() -> dict:
++    """
++    Per-strategie compounding-saldi (9 sep 2026) -- elke strategie in
++    STRATEGIES heeft sinds de A/B/C/D-fairness-fix zijn EIGEN,
++    onafhankelijke saldo (state_module.get_strategy_balance), i.p.v.
++    één gedeeld "simulated_balance"-veld (dat nu uitsluitend nog voor
++    VIX Rider bestaat, welke niet op dit dashboard staat).
++    """
+     try:
+         with open(STATE_PATH) as f:
+-            return float(json.load(f).get("simulated_balance"))
++            balances = json.load(f).get("strategy_balances", {})
+     except Exception:
+-        return None
++        balances = {}
++    return {code: balances.get(code, 2000.0) for code in STRATEGIES}
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -193,12 +223,13 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
+     d20_trades = [t for t in all_trades if t["date"] in trading_days]
+ 
+     per_strategy = {}
++    balances = load_strategy_balances()
+     for code in STRATEGIES:
+         mine = lambda ts: [t for t in ts if t["strategy"] == code]
+         first = min((t["date"] for t in all_trades if t["strategy"] == code), default=None)
+         per_strategy[code] = {
+             "day": summarize(mine(day_trades)), "week": summarize(mine(week_trades)),
+-            "d20": summarize(mine(d20_trades)), "first_date": first,
++            "d20": summarize(mine(d20_trades)), "first_date": first, "balance": balances[code],
+         }
+ 
+     signals = load_signals(iso)
+@@ -209,8 +240,9 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
+     return {
+         "date": iso, "trades": sorted(day_trades, key=lambda t: t["entry_time"]),
+         "total": summarize(day_trades), "week": summarize(week_trades),
+-        "per_strategy": per_strategy, "balance": load_balance(),
++        "per_strategy": per_strategy, "balance": round(sum(balances.values()), 2),
+         "signals_skipped": [s for s in signals if s.get("status") == "skipped"],
++        "vix": load_vix_report(iso),
+         "events": events,
+         "event_counts": {lvl: sum(1 for e in events if e.get("level") == lvl) for lvl in ("urgent", "warning", "info")},
+         "prev_date": prev_days[-1] if prev_days else None, "next_date": next_days[0] if next_days else None,
+@@ -231,6 +263,7 @@ header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
+ .daytotal{font-size:15px;color:var(--ink-2);margin:0 0 24px}.daytotal strong{font-size:20px;font-weight:600;margin-right:6px}
+ .pos{color:var(--win)}.neg{color:var(--loss)}.zero{color:var(--flat)}
+ .timeline{background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:18px 20px 12px;margin-bottom:20px}.timeline h2{font-size:14px;font-weight:600;color:var(--ink-2);margin:0 0 12px}.timeline svg{width:100%;height:auto;display:block}.timeline text{font-size:11px;fill:var(--ink-3)}.tick{stroke:var(--rule)}
++.vix-badge{font-weight:400;color:var(--ink-3);font-size:12px}
+ .bar{rx:3}.bar.TTS{fill:var(--tts)}.bar.QFS{fill:var(--qfs)}.bar.RVB{fill:var(--rvb)}.bar.VDB{fill:var(--vdb)}.bar.loss{opacity:.45}
+ .legend{display:flex;gap:18px;font-size:12px;color:var(--ink-2);margin-top:6px;flex-wrap:wrap}.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}.legend .TTS::before{background:var(--tts)}.legend .QFS::before{background:var(--qfs)}.legend .RVB::before{background:var(--rvb)}.legend .VDB::before{background:var(--vdb)}.legend .dim::before{background:var(--ink-3);opacity:.45}
+ .scores{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.score{background:var(--sheet);border:1px solid var(--rule);border-left-width:5px;border-radius:10px;padding:14px 16px}.score.TTS{border-left-color:var(--tts)}.score.QFS{border-left-color:var(--qfs)}.score.RVB{border-left-color:var(--rvb)}.score.VDB{border-left-color:var(--vdb)}
+@@ -331,7 +364,10 @@ def render(d: dict) -> str:
+     tot, wk = d["total"], d["week"]
+     nav_prev = f'<a href="/?date={d["prev_date"]}">← {d["prev_date"][5:]}</a>' if d["prev_date"] else '<span>← eerder</span>'
+     nav_next = f'<a href="/?date={d["next_date"]}">{d["next_date"][5:]} →</a>' if d["next_date"] else '<span>later →</span>'
+-    saldo = f" · saldo {eur(d['balance'], sign=False)}" if d["balance"] is not None else ""
++    saldo = f" · totaal saldo {eur(d['balance'], sign=False)} (4x €2.000 basis)" if d["balance"] is not None else ""
++    v = d.get("vix")
++    vix_badge = (f' <span class="vix-badge">VIX {v["vix"]:.2f} · TTS/QFS {v["scalper_pct"]*100:.0f}% '
++                f'· VIX Rider {v["macro_panic_pct"]*100:.0f}%</span>') if v else ""
+     daytotal = (f'<strong class="{cls(tot["pnl"])}">{eur(tot["pnl"])}</strong> netto over {tot["trades"]} trades '
+                 f'({tot["wins"]} winst, {tot["losses"]} verlies){saldo} · week {eur(wk["pnl"])}') if tot["trades"] else "Geen afgeronde trades op deze dag."
+ 
+@@ -344,7 +380,7 @@ def render(d: dict) -> str:
+         sinds = f" · sinds {s['first_date']}" if s["first_date"] else ""
+         cards.append(f"""<article class="score {code}"><h3>{e(naam)}</h3><div class="sub">{code} · {venster}</div>
+ <div class="pnl {cls(dd['pnl'])}">{eur(dd['pnl'])}</div>
+-<dl><dt>Trades</dt><dd>{dd['trades']} ({dd['wins']} winst)</dd><dt>Gem. R</dt><dd>{avg_r}</dd><dt>Winrate 20d</dt><dd>{wr}</dd></dl>
++<dl><dt>Trades</dt><dd>{dd['trades']} ({dd['wins']} winst)</dd><dt>Gem. R</dt><dd>{avg_r}</dd><dt>Winrate 20d</dt><dd>{wr}</dd><dt>Saldo</dt><dd>{eur(s['balance'], sign=False)}</dd></dl>
+ <div class="wtd">Deze week {eur(ww['pnl'])} · 20 dagen {eur(d20['pnl'])}{sinds}</div></article>""")
+ 
+     trades = "".join(trade_html(t) for t in d["trades"]) or '<div class="empty">Geen trades. Zodra een trade sluit verschijnt hij hier met grafiek.</div>'
+@@ -371,7 +407,7 @@ def render(d: dict) -> str:
+ <title>Dagrapport — {e(titel)}</title><style>{CSS}</style></head><body><div class="page">
+ <header><h1>{e(titel)}</h1><nav class="daynav" aria-label="Dag kiezen">{nav_prev}{nav_next}</nav></header>
+ <p class="daytotal">{daytotal}</p>
+-<section class="timeline" aria-label="Verloop van de handelsdag"><h2>Handelsdag 15:30–22:00 CEST</h2>{timeline_svg(d['trades'])}
++<section class="timeline" aria-label="Verloop van de handelsdag"><h2>Handelsdag 15:30–22:00 CEST{vix_badge}</h2>{timeline_svg(d['trades'])}
+ <div class="legend"><span class="TTS">Touch &amp; Turn</span><span class="QFS">Quick Flip</span><span class="RVB">Relative Volume Breakout</span><span class="VDB">VWAP Dynamic Bounce</span><span class="dim">Verliestrade (transparant, onder de lijn)</span></div></section>
+ <section class="scores" aria-label="Resultaat per strategie">{''.join(cards)}</section>
+ <section class="trades"><h2>Trades van deze dag<div class="filters" role="group" aria-label="Filter op strategie">
+diff --git a/main.py b/main.py
+index 27ebbad..d1794ca 100644
+--- a/main.py
++++ b/main.py
+@@ -221,10 +221,20 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3)
+     """
+     logger.info(f"=== Start cyclus ({'DRY-RUN' if dry_run else 'LIVE'}) ===")
+ 
+-    if capital is None:
+-        from state_module import get_simulated_balance
+-        capital = get_simulated_balance()
+-        logger.info(f"Compounding-kapitaal opgehaald: €{capital:.2f}")
++    # PER-STRATEGIE SALDI (9 sep 2026): TTS en QFS draaiden tot nu toe
++    # BEIDE op hetzelfde `allocated_capital`-getal binnen één cyclus --
++    # ook al waren het twee te vergelijken strategieën, ze deelden
++    # feitelijk nog steeds één pot. Nu haalt elke strategie zijn EIGEN
++    # onafhankelijke compounding-saldo op (get_strategy_balance), zodat
++    # een verlies bij TTS de positiegrootte van QFS niet meer raakt en
++    # omgekeerd. Het `capital`-argument van deze functie is nog puur
++    # voor losse tests met een vast bedrag; in de normale (cron-)flow
++    # wordt het genegeerd ten gunste van de per-strategie saldi.
++    from state_module import get_strategy_balance
++    strategie_saldi = {"TTS": get_strategy_balance("TTS"), "QFS": get_strategy_balance("QFS")}
++    if capital is not None:
++        strategie_saldi = {"TTS": capital, "QFS": capital}
++    logger.info(f"Saldi per strategie: TTS €{strategie_saldi['TTS']:.2f} · QFS €{strategie_saldi['QFS']:.2f}")
+ 
+     state = load_state()
+     if not state["trading_enabled"]:
+@@ -236,11 +246,15 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3)
+     # want de VIX-check vereist een live Gateway-sessie. In dry-run
+     # slaan we dit over zodat je de rest van de keten kunt blijven
+     # testen zonder IBKR-afhankelijkheid.
+-    allocated_capital = capital  # standaard: volledig kapitaal (dry-run of als allocatie faalt)
++    #
++    # De 3%-dagstop is bewust een GLOBALE, gedeelde veiligheidsrem (niet
++    # per strategie) -- daarom wordt hier de SOM van beide saldi als
++    # referentie gebruikt, ook al compounden ze verder onafhankelijk.
+     if not dry_run:
+         from risk_module import check_circuit_breakers, get_allocated_capital
+ 
+-        breaker_result = check_circuit_breakers(capital=capital)
++        totaal_referentie = strategie_saldi["TTS"] + strategie_saldi["QFS"]
++        breaker_result = check_circuit_breakers(capital=totaal_referentie)
+         if not breaker_result["safe_to_trade"]:
+             logger.warning(f"Circuit breaker actief: {breaker_result['reason']}")
+             return {"status": "circuit_breaker_triggered", "reason": breaker_result["reason"]}
+@@ -249,16 +263,19 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3)
+         # allocatie (risk_module.get_dynamic_allocation) werd berekend
+         # en getest, maar NOOIT daadwerkelijk toegepast op de
+         # positiegrootte -- de scalper gebruikte tot nu toe altijd het
+-        # volledige kapitaal, ongeacht de VIX-stand. Nu wel:
+-        allocation = get_allocated_capital(capital, "scalper")
+-        allocated_capital = allocation["allocated_capital"]
+-        logger.info(
+-            f"VIX-allocatie toegepast: €{allocated_capital:.2f} van €{capital:.2f} "
+-            f"({allocation['allocation_pct']*100:.0f}%, VIX {allocation['vix']})"
+-        )
+-
+-        if allocated_capital <= 0:
+-            reason = f"Geen kapitaal toegewezen aan de scalper (VIX-allocatie 0%) -- cyclus overgeslagen."
++        # volledige kapitaal, ongeacht de VIX-stand. Nu wel -- en sinds
++        # 9 sep 2026 toegepast op ELK van de twee EIGEN saldi apart
++        # (dezelfde VIX-drempel geldt voor beide, elk op zijn eigen basis).
++        for code in ("TTS", "QFS"):
++            allocation = get_allocated_capital(strategie_saldi[code], "scalper")
++            strategie_saldi[code] = allocation["allocated_capital"]
++            logger.info(
++                f"VIX-allocatie toegepast op {code}: €{strategie_saldi[code]:.2f} van €{get_strategy_balance(code):.2f} "
++                f"({allocation['allocation_pct']*100:.0f}%, VIX {allocation['vix']})"
++            )
++
++        if strategie_saldi["TTS"] <= 0 and strategie_saldi["QFS"] <= 0:
++            reason = "Geen kapitaal toegewezen aan TTS of QFS (VIX-allocatie 0%) -- cyclus overgeslagen."
+             logger.info(reason)
+             return {"status": "skipped", "reason": reason}
+ 
+@@ -288,8 +305,10 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3)
+     # netwerkverkeer.
+     taken_lijst = []
+     for symbool, reden in chosen:
+-        taken_lijst.append((symbool, reden, "TTS"))
+-        taken_lijst.append((symbool, reden, "QFS"))
++        if strategie_saldi["TTS"] > 0:
++            taken_lijst.append((symbool, reden, "TTS"))
++        if strategie_saldi["QFS"] > 0:
++            taken_lijst.append((symbool, reden, "QFS"))
+ 
+     # NIEUW (2 sep 2026, bugfix): bij de volledige-watchlist-scan (26
+     # symbolen) veroorzaakte het gelijktijdig starten van ALLE taken
+@@ -315,9 +334,9 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3)
+             logger.info(f"--- Symbool: {symbol} ({news_reason}) [{strategie}] ---")
+             try:
+                 if strategie == "TTS":
+-                    resultaat = await asyncio.to_thread(run_symbol_cycle, symbol, allocated_capital, dry_run)
++                    resultaat = await asyncio.to_thread(run_symbol_cycle, symbol, strategie_saldi["TTS"], dry_run)
+                 else:
+-                    resultaat = await asyncio.to_thread(run_reversal_symbol_cycle, symbol, allocated_capital, dry_run)
++                    resultaat = await asyncio.to_thread(run_reversal_symbol_cycle, symbol, strategie_saldi["QFS"], dry_run)
+                 resultaat["strategie"] = strategie
+                 return resultaat
+             except Exception as e:
+diff --git a/order_module.py b/order_module.py
+index 1302034..202e449 100644
+--- a/order_module.py
++++ b/order_module.py
+@@ -571,10 +571,20 @@ def report_trade_outcome(spec: BracketOrderSpec, symbol: str, outcome: dict, ent
+     # hier het BRUTO bedrag gebruikt, wat het saldo te optimistisch
+     # liet compounden -- fees zijn een reëel, terugkerend verlies op
+     # elke trade, ongeacht de uitkomst.
++    #
++    # PER-STRATEGIE GESPLITST (9 sep 2026): voorheen werd hier altijd
++    # het ÉÉN-op-ÉÉN gedeelde saldo bijgewerkt (update_simulated_balance),
++    # ongeacht welke strategie de trade deed -- daardoor beïnvloedde een
++    # verlies van bijv. TTS de positiegrootte van QFS/RVB/VDB, wat een
++    # eerlijke A/B/C/D-vergelijking onmogelijk maakte. Nu wordt de
++    # strategie afgeleid (spec.strategy, of anders het OCA-prefix -- zelfde
++    # aanpak als het dashboard al gebruikte) en alleen HAAR EIGEN saldo
++    # bijgewerkt.
+     try:
+-        from state_module import update_simulated_balance
++        from state_module import update_strategy_balance
+         if pnl_net is not None:
+-            update_simulated_balance(pnl_net)
++            strategie_code = spec.strategy or (spec.oca_group.split("_", 1)[0] if spec.oca_group else "TTS")
++            update_strategy_balance(strategie_code, pnl_net)
+     except Exception as e:
+         logger.error(f"Kon gesimuleerd saldo niet bijwerken voor {symbol}: {e}")
+ 
+diff --git a/rvb_scan.py b/rvb_scan.py
+index 694e6a1..3e1d3fa 100644
+--- a/rvb_scan.py
++++ b/rvb_scan.py
+@@ -120,7 +120,6 @@ def run_scan(dry_run: bool = True) -> dict:
+     from data_module import get_historical_candles
+     from rvb_strategy_module import scan_symbol, build_rvb_trade, ORB_END_TIME
+     from rvb_baseline_builder import load_baseline
+-    from state_module import get_simulated_balance
+ 
+     now = datetime.now()
+     samenvatting = {"scanned": 0, "signals": 0, "dispatched": 0, "skipped": []}
+@@ -142,12 +141,14 @@ def run_scan(dry_run: bool = True) -> dict:
+         return samenvatting
+ 
+     traded = load_traded_today()
+-    capital = get_simulated_balance()
+-
+-    # Kapitaal per trade: hetzelfde compounding-saldo als TTS/QFS. De
+-    # VIX-allocatie (risk_module) is bewust NIET toegepast in de MVP --
+-    # RVB deelt nog geen budget met de andere strategieën; dat is een
+-    # bewuste, latere keuze zodra de A/B-cijfers er zijn.
++    from state_module import get_strategy_balance
++    capital = get_strategy_balance("RVB")
++
++    # Kapitaal per trade: RVB's EIGEN, onafhankelijke compounding-saldo
++    # (9 sep 2026 -- voorheen deelde RVB nog het generieke gesimuleerde
++    # saldo met TTS/QFS/VIX Rider, wat de A/B/C/D-vergelijking
++    # vervuilde). De VIX-allocatie (risk_module) is bewust NIET
++    # toegepast in de MVP -- dat blijft een latere, bewuste keuze.
+ 
+     nieuwe_trades = 0
+     for symbol in FALLBACK_WATCHLIST:
+diff --git a/state_module.py b/state_module.py
+index 6a5c9f7..9fa9747 100644
+--- a/state_module.py
++++ b/state_module.py
+@@ -102,8 +102,16 @@ def get_simulated_balance(path: str = None) -> float:
+     """
+     Haalt het huidige gesimuleerde saldo op -- start op
+     STARTING_SIMULATED_BALANCE (€2000) en wordt bijgewerkt na elke
+-    gesloten trade (zowel scalper als VIX Rider, want het is
+-    conceptueel dezelfde inleg die via de VIX-schaal verdeeld wordt).
++    gesloten trade van de VIX Rider (macro_panic), want die deelt
++    conceptueel dezelfde inleg met de scalper via de VIX-schaal
++    (risk_module.get_dynamic_allocation).
++
++    LET OP (9 sep 2026): TTS, QFS, RVB en VDB gebruiken dit NIET meer
++    -- die hebben elk hun EIGEN, onafhankelijke compounding-saldo
++    gekregen (zie get_strategy_balance/update_strategy_balance
++    hieronder), zodat ze eerlijk (zonder onderlinge beïnvloeding via
++    een gedeelde pot) met elkaar vergeleken kunnen worden. Dit veld
++    blijft uitsluitend voor VIX Rider bestaan.
+ 
+     Dit is compounding: winst/verlies wordt herbelegd, dus de
+     positiegrootte-berekeningen van morgen zijn gebaseerd op het
+@@ -115,9 +123,10 @@ def get_simulated_balance(path: str = None) -> float:
+ 
+ def update_simulated_balance(pnl: float, path: str = None) -> float:
+     """
+-    Werkt het gesimuleerde saldo bij met het resultaat van een
+-    afgeronde trade (compounding). Aan te roepen door ELKE strategie
+-    zodra een trade sluit (TP/SL/trailing-stop geraakt).
++    Werkt het VIX Rider-saldo bij met het resultaat van een afgeronde
++    trade (compounding). Zie de LET OP in get_simulated_balance() --
++    TTS/QFS/RVB/VDB gebruiken sinds 9 sep 2026 update_strategy_balance()
++    in plaats van deze functie.
+ 
+     Returns:
+         Het NIEUWE saldo, na verwerking van deze trade.
+@@ -131,6 +140,53 @@ def update_simulated_balance(pnl: float, path: str = None) -> float:
+     return new_balance
+ 
+ 
++# ---------------------------------------------------------------------------
++# Per-strategie compounding-saldi (9 sep 2026)
++# ---------------------------------------------------------------------------
++# TTS, QFS, RVB en VDB draaiden tot nu toe allemaal op ÉÉN gedeeld
++# gesimuleerd saldo (get_simulated_balance() hierboven) -- dat betekende
++# dat een verlies van de ene strategie de positiegrootte van een ANDERE
++# strategie liet krimpen, puur via het gedeelde compounding-saldo. Voor
++# een eerlijke A/B/C/D-vergelijking krijgt elke strategie nu zijn EIGEN,
++# volledig onafhankelijke startsaldo van €2000, opgeslagen onder
++# "strategy_balances" in state.json (los van "simulated_balance", dat
++# uitsluitend voor VIX Rider blijft bestaan).
++
++STRATEGY_STARTING_BALANCE = 2000.0
++
++
++def get_strategy_balance(strategy: str, path: str = None) -> float:
++    """
++    Haalt het gesimuleerde saldo van ÉÉN specifieke strategie op
++    (bijv. "TTS", "QFS", "RVB", "VDB"). Onbekende strategieën starten
++    automatisch op STRATEGY_STARTING_BALANCE (€2000) bij de eerste
++    aanroep -- geen aparte "registratie"-stap nodig voor een nieuwe
++    strategie.
++    """
++    state = load_state(path)
++    balances = state.get("strategy_balances", {})
++    return balances.get(strategy, STRATEGY_STARTING_BALANCE)
++
++
++def update_strategy_balance(strategy: str, pnl: float, path: str = None) -> float:
++    """
++    Werkt het gesimuleerde saldo van ÉÉN specifieke strategie bij met
++    het resultaat van een afgeronde trade (onafhankelijk compounding
++    -- raakt de saldi van de andere strategieën niet aan).
++
++    Returns:
++        Het NIEUWE saldo van deze strategie, na verwerking van deze trade.
++    """
++    state = load_state(path)
++    balances = state.setdefault("strategy_balances", {})
++    current_balance = balances.get(strategy, STRATEGY_STARTING_BALANCE)
++    new_balance = current_balance + pnl
++    balances[strategy] = new_balance
++    save_state(state, path)
++    logger.info(f"Gesimuleerd saldo [{strategy}] bijgewerkt: €{current_balance:.2f} {'+' if pnl >= 0 else ''}{pnl:.2f} -> €{new_balance:.2f}")
++    return new_balance
++
++
+ def add_position(position: dict, path: str = None) -> dict:
+     """
+     Voegt een open positie toe aan de positielijst -- aangeroepen
+diff --git a/vix_daily_report.py b/vix_daily_report.py
+index 2f52ffb..3cba6e6 100644
+--- a/vix_daily_report.py
++++ b/vix_daily_report.py
+@@ -55,28 +55,53 @@ def send_daily_vix_report(total_capital: float = 2000.0) -> dict:
+     scalper_capital = total_capital * allocation["scalper_pct"]
+     vix_rider_capital = total_capital * allocation["macro_panic_pct"]
+ 
+-    if allocation["scalper_pct"] == 1.0:
+-        besluit = "Alleen Touch & Turn Scalper handelt vandaag (lage volatiliteit)."
+-    elif allocation["macro_panic_pct"] == 1.0:
+-        besluit = "Alleen VIX Rider handelt vandaag (hoge volatiliteit)."
+-    else:
+-        besluit = "Beide strategieën handelen vandaag, met verdeeld kapitaal."
++    # VERWIJDERD (9 sep 2026, op verzoek): de regel "Alleen Touch & Turn
++    # Scalper handelt vandaag" (en de "Alleen VIX Rider"/"Beide
++    # strategieën"-varianten) was ACHTERHAALD -- die klopte alleen toen
++    # TTS en VIX Rider de enige twee strategieën waren. Sinds QFS, RVB
++    # en VDB zijn toegevoegd (die ONAFHANKELIJK van deze VIX-schaal
++    # handelen, met hun eigen saldo) suggereerde die zin ten onrechte
++    # dat er die dag maar één strategie actief zou zijn.
+ 
+     message = (
+         f"📊 Dagelijks VIX-rapport\n\n"
+         f"VIX: {vix:.2f}\n\n"
+-        f"{besluit}\n\n"
+         f"Touch & Turn Scalper: {allocation['scalper_pct']*100:.0f}% "
+         f"(€{scalper_capital:,.2f})\n"
+         f"VIX Rider: {allocation['macro_panic_pct']*100:.0f}% "
+         f"(€{vix_rider_capital:,.2f})"
+     )
+     send_telegram_message(urgent=True, text=message)
+-    logger.info(f"Dagelijks VIX-rapport verstuurd: VIX={vix:.2f}, {besluit}")
++    logger.info(f"Dagelijks VIX-rapport verstuurd: VIX={vix:.2f}, scalper_pct={allocation['scalper_pct']}")
++
++    # NIEUW (9 sep 2026, op verzoek): de VIX-waarde ook wegschrijven naar
++    # een logbestand, zodat het dashboard 'm kan tonen zonder zelf een
++    # live IBKR-aanroep te hoeven doen (dashboard_server.py is bewust
++    # een pure log-lezer, zie de moduledocstring daar).
++    _log_vix_report(vix, allocation)
+ 
+     return {"vix": vix, **allocation}
+ 
+ 
++def _log_vix_report(vix: float, allocation: dict) -> None:
++    import json
++    import os
++    from datetime import datetime
++
++    path = os.environ.get("VIX_REPORT_LOG", "/opt/strategy/logs/vix_daily.jsonl")
++    try:
++        os.makedirs(os.path.dirname(path), exist_ok=True)
++        with open(path, "a") as f:
++            f.write(json.dumps({
++                "time": datetime.now().isoformat(timespec="seconds"),
++                "vix": vix,
++                "scalper_pct": allocation["scalper_pct"],
++                "macro_panic_pct": allocation["macro_panic_pct"],
++            }) + "\n")
++    except Exception as e:
++        logger.warning(f"Kon VIX-rapport niet naar logbestand schrijven: {e}")
++
++
+ if __name__ == "__main__":
+     result = send_daily_vix_report()
+     print(result)
+diff --git a/vwap_bounce_scan.py b/vwap_bounce_scan.py
+index 3569f16..4901356 100644
+--- a/vwap_bounce_scan.py
++++ b/vwap_bounce_scan.py
+@@ -118,7 +118,7 @@ def run_scan(dry_run: bool = True) -> dict:
+     from news_module import FALLBACK_WATCHLIST
+     from data_module import get_historical_candles
+     from vwap_bounce_module import scan_symbol, build_vdb_trade
+-    from state_module import get_simulated_balance
++    from state_module import get_strategy_balance
+ 
+     now = datetime.now()
+     samenvatting = {"scanned": 0, "signals": 0, "dispatched": 0, "skipped": []}
+@@ -135,12 +135,11 @@ def run_scan(dry_run: bool = True) -> dict:
+         return samenvatting
+ 
+     traded = load_traded_today()
+-    capital = get_simulated_balance()
++    capital = get_strategy_balance("VDB")
+ 
+-    # Kapitaal per trade: hetzelfde compounding-saldo als TTS/QFS/RVB.
+-    # De VIX-allocatie (risk_module) is bewust NIET toegepast in de MVP
+-    # -- VDB deelt nog geen budget met de andere strategieën, net als
+-    # bij RVB, tot de A/B-cijfers er zijn.
++    # Kapitaal per trade: VDB's EIGEN, onafhankelijke compounding-saldo
++    # (9 sep 2026 -- zelfde aanpak als bij RVB). De VIX-allocatie
++    # (risk_module) is bewust NIET toegepast in de MVP.
+ 
+     nieuwe_trades = 0
+     for symbol in FALLBACK_WATCHLIST:
