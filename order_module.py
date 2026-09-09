@@ -55,7 +55,18 @@ ORDER_TIMEOUT_MINUTES = 60
 # op dat moment wordt geaccepteerd -- de 90-minuten-regel is de
 # bedoelde aard van deze SCALPING-strategie, geen bug om te vermijden.
 MARKET_OPEN_TIME = dt_time(15, 30)  # CEST
-FORCED_CLOSE_MINUTES_AFTER_OPEN = 90
+# AANGEPAST (9 sep 2026, op verzoek na video-audit): opgerekt van 90
+# naar 150 minuten. Bevinding bij het herlezen van beide strategie-
+# video's: geen van beide vereist EXPLICIET een geforceerde sluiting
+# van een AL-OPEN positie na 90 minuten -- ze zeggen alleen dat er
+# geen NIEUWE trades meer gestart moeten worden na 90 minuten. Het
+# Quick-Flip-Scalper-voorbeeld liet een trade zelfs tot 13:45 (ver
+# voorbij 90 min na opening) doorlopen. De 90-minuten-regel zelf bleef
+# als praktisch vangnet nodig (zie de GOOGL-nacht-incident hierboven),
+# maar 150 minuten geeft trades meer ruimte om zich te ontwikkelen,
+# terwijl het vangnet tegen een oneindig-open-blijvende positie blijft
+# bestaan.
+FORCED_CLOSE_MINUTES_AFTER_OPEN = 150
 
 
 def get_forced_close_time() -> dt_time:
@@ -65,7 +76,7 @@ def get_forced_close_time() -> dt_time:
     return dt_time(close_minutes // 60, close_minutes % 60)
 
 
-FORCED_CLOSE_TIME = get_forced_close_time()  # 17:00 CEST, bij marktopening 15:30 + 90 min
+FORCED_CLOSE_TIME = get_forced_close_time()  # 18:00 CEST, bij marktopening 15:30 + 150 min
 
 
 @dataclass
@@ -336,7 +347,7 @@ def monitor_oco_exit(tp_order_id: str | None, sl_order_id: str | None, account_i
         # 24 aug 2026 gebeurde). Bewuste keuze van de gebruiker: een
         # eventueel verlies op dit moment wordt geaccepteerd.
         if datetime.now().time() >= FORCED_CLOSE_TIME:
-            logger.warning(f"Geforceerde sluiting (90-minuten-regel, {FORCED_CLOSE_TIME}) bereikt -- positie wordt nu gesloten ongeacht TP/SL-status.")
+            logger.warning(f"Geforceerde sluiting (150-minuten-regel, {FORCED_CLOSE_TIME}) bereikt -- positie wordt nu gesloten ongeacht TP/SL-status.")
             return {"result": "forced_close_90min", "tp_status": "closing", "sl_status": "closing"}
 
         tp_result = get_order_status(tp_order_id) if tp_order_id else {}
