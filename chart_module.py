@@ -44,6 +44,7 @@ def genereer_trade_grafiek(
     direction: str,
     result: str,
     entry_time=None,
+    exit_time=None,
 ) -> str | None:
     """
     Bouwt een lijngrafiek (close-prijzen van de meegegeven candles) met
@@ -102,7 +103,17 @@ def genereer_trade_grafiek(
         # prijsniveau over de hele dag.
         if entry_time is not None:
             ax.scatter([entry_time], [entry_price], color="#ffd166", s=140, zorder=6,
-                       marker="^", edgecolors="black", linewidths=1, label=f"Entry-moment ({entry_time.strftime('%H:%M')})")
+                       marker="^", edgecolors="black", linewidths=1, label=f"Instap ({entry_time.strftime('%H:%M')})")
+            ax.axvline(entry_time, color="#ffd166", linestyle=":", linewidth=1, alpha=0.8)
+
+        # NIEUW (9 sep 2026, op verzoek): het UITSTAP-moment op de tijdas
+        # (i.p.v. altijd op de laatste candle) plus een lichte band
+        # tussen in- en uitstap, zodat in één oogopslag te zien is hoe
+        # lang de positie openstond en wat de koers in die tijd deed.
+        if exit_time is not None:
+            ax.axvline(exit_time, color="#888888", linestyle=":", linewidth=1, alpha=0.8)
+        if entry_time is not None and exit_time is not None and exit_time > entry_time:
+            ax.axvspan(entry_time, exit_time, color="#ffd166", alpha=0.10, zorder=1, label="In positie")
 
         # Take-profit en stop-loss
         tp_kleur = "#06d6a0"
@@ -115,8 +126,10 @@ def genereer_trade_grafiek(
             exit_kleur = tp_kleur if result == "take_profit_hit" else (
                 sl_kleur if result == "stop_loss_hit" else "#ffd166"
             )
-            ax.scatter([tijden[-1]], [exit_price], color=exit_kleur, s=100, zorder=5,
-                       marker="X", label=f"Exit ({exit_price:.2f})")
+            exit_x = exit_time if exit_time is not None else tijden[-1]
+            exit_label = f"Uitstap ({exit_price:.2f}" + (f", {exit_time.strftime('%H:%M')})" if exit_time is not None else ")")
+            ax.scatter([exit_x], [exit_price], color=exit_kleur, s=140, zorder=6,
+                       marker="X", edgecolors="black", linewidths=1, label=exit_label)
 
         richting_pijl = "↑ LONG" if direction == "LONG" else "↓ SHORT"
         resultaat_label = {

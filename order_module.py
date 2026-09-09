@@ -550,7 +550,8 @@ def report_trade_outcome(spec: BracketOrderSpec, symbol: str, outcome: dict, ent
         # exit_price, netto-PnL, fees, chart) daadwerkelijk vullen -- de
         # kolommen bestonden al, maar werden hier nog niet meegegeven.
         entry_time = outcome.get("entry_time")
-        grafiek = _maak_trade_grafiek(spec, symbol, direction, result, used_entry_price, exit_price, entry_time)
+        exit_moment = datetime.now()  # report_trade_outcome draait direct na het sluiten
+        grafiek = _maak_trade_grafiek(spec, symbol, direction, result, used_entry_price, exit_price, entry_time, exit_moment)
         log_trade({
             "symbol": symbol, "direction": direction,
             "entry_price": used_entry_price, "take_profit": spec.take_profit,
@@ -559,7 +560,7 @@ def report_trade_outcome(spec: BracketOrderSpec, symbol: str, outcome: dict, ent
             "pnl_note": journal_pnl_note,
             "strategy": _strategie_van(spec),
             "entry_time": entry_time.strftime("%H:%M:%S") if hasattr(entry_time, "strftime") else "",
-            "exit_time": datetime.now().strftime("%H:%M:%S"),
+            "exit_time": exit_moment.strftime("%H:%M:%S"),
             "exit_price": exit_price if exit_price is not None else "",
             "pnl_net": pnl_net if pnl_net is not None else "",
             "fees": fees_totaal if fees_totaal is not None else "",
@@ -635,7 +636,7 @@ def _notify_safe(message: str) -> None:
 
 
 def _maak_trade_grafiek(spec: "BracketOrderSpec", symbol: str, direction: str, result: str,
-                        entry_price: float, exit_price, entry_time) -> str:
+                        entry_price: float, exit_price, entry_time, exit_time=None) -> str:
     """
     NIEUW (9 sep 2026, op verzoek): direct na het afronden van een trade
     de grafiek maken (chart_module.py) en de BESTANDSNAAM teruggeven,
@@ -660,6 +661,7 @@ def _maak_trade_grafiek(spec: "BracketOrderSpec", symbol: str, direction: str, r
             symbol=symbol, candles=vandaag, box_high=box_high, box_low=box_low,
             entry_price=entry_price, take_profit=spec.take_profit, stop_loss=spec.stop_loss,
             exit_price=exit_price, direction=direction, result=result, entry_time=entry_time,
+            exit_time=exit_time,
         )
         if not pad:
             return ""
