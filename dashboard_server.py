@@ -214,6 +214,19 @@ def summarize(trades: list[dict]) -> dict:
             "avg_r": round(sum(rs) / len(rs), 2) if rs else None}
 
 
+def _leid_strategie_af(tekst: str, sym_strat: dict) -> str:
+    t = tekst.lstrip("✅🛑⏰⏱️⚠️🚨📤🧪ℹ️🔍👀🎯⏭️🏁 ")
+    for naam in ("VDB", "RVB", "QFS", "TTS"):
+        if f" {naam} " in f" {t[:40]} " or f"[DRY-RUN] {naam}" in t:
+            return naam
+    if "omkeerpatroon" in t or "Quick Flip" in t:
+        return "QFS"
+    if "Touch & Turn" in t or "VIX" in t:
+        return "TTS+QFS" if "Touch & Turn" in t else ""
+    sym = t.split(" ", 1)[0].rstrip(":")
+    return sym_strat.get(sym, "")
+
+
 def build_day(day: date, all_trades: list[dict]) -> dict:
     iso = day.isoformat()
     monday = day - timedelta(days=day.weekday())
@@ -234,6 +247,13 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
 
     signals = load_signals(iso)
     events = load_events(iso)
+    # Strategielabel afleiden voor regels van vóór 9 sep 2026 (toen nog
+    # zonder `strategy`-veld): eerst uit de tekst, anders uit de journal
+    # (welke strategie handelde dit symbool op deze dag).
+    sym_strat = {t["symbol"]: t.get("strategy", "") for t in day_trades if t.get("strategy")}
+    for ev in events:
+        if not ev.get("strategy"):
+            ev["strategy"] = _leid_strategie_af(ev.get("text", ""), sym_strat)
     dates = sorted({t["date"] for t in all_trades})
     prev_days = [d for d in dates if d < iso]
     next_days = [d for d in dates if d > iso]

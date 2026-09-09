@@ -120,6 +120,38 @@ def vul_oca_en_strategie(rij):
     return gewijzigd
 
 
+def fees_uit_events(symbool, datum, volgnummer=0):
+    """(pnl_net, fees, exit_price) uit de resultaatmelding in events.jsonl, of (None, None, None)."""
+    if not os.path.exists(EVENTS):
+        return None, None, None
+    pat = re.compile(r"Exit ([\d.]+).*?€([+-]?[\d.,]+) netto \(na €([\d.,]+) fees\)")
+    hits = []
+    with open(EVENTS) as f:
+        for regel in f:
+            try:
+                ev = json.loads(regel)
+            except json.JSONDecodeError:
+                continue
+            tekst = ev.get("text", "")
+            if ev.get("time", "").startswith(datum) and tekst.lstrip("✅🛑⏰⚠️ ").startswith(symbool + " "):
+                m = pat.search(tekst)
+                if m:
+                    hits.append((float(m.group(2).replace(",", "")), float(m.group(3).replace(",", "")), float(m.group(1))))
+    return hits[volgnummer] if len(hits) > volgnummer else (None, None, None)
+
+
+def vul_fees(rij, volgnummer=0):
+    if rij.get("fees") and rij.get("pnl_net"):
+        return False
+    netto, fees, exit_price = fees_uit_events(rij["symbol"], rij["date"], volgnummer)
+    if fees is None:
+        return False
+    rij["fees"] = rij.get("fees") or f"{fees}"
+    rij["pnl_net"] = rij.get("pnl_net") or f"{netto}"
+    rij["exit_price"] = rij.get("exit_price") or f"{exit_price}"
+    return True
+
+
 def maak_grafiek(rij, volgnummer=0):
     from data_module import get_historical_candles
     from chart_module import genereer_trade_grafiek
@@ -188,6 +220,9 @@ def main():
         teller[sleutel] = volgnummer + 1
         if not alles and rij["date"] != vandaag:
             continue
+        if "fees" in velden and vul_fees(rij, volgnummer):
+            print(f"  {rij['symbol']} {rij['date']}: fees/netto aangevuld (€{rij['fees']} / €{rij['pnl_net']})")
+            gewijzigd += 1
         if "oca_group" in velden and vul_oca_en_strategie(rij):
             print(f"  {rij['symbol']} {rij['date']}: OCA/strategie aangevuld ({rij['oca_group']})")
             gewijzigd += 1
