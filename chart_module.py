@@ -32,6 +32,35 @@ logger = logging.getLogger("chart_module")
 CHART_OUTPUT_DIR = "/opt/strategy/logs/charts"
 
 
+def _nabeloop_na_uitstap(candles, exit_time, direction, take_profit, stop_loss) -> str:
+    """Tekst over wat de koers NA de uitstap deed t.o.v. TP/SL ("" als n.v.t.)."""
+    if exit_time is None:
+        return ""
+    later = [c for c in candles if c.timestamp > exit_time]
+    if not later:
+        return ""
+    tp_tijd = sl_tijd = None
+    for c in later:
+        raakt_tp = c.high >= take_profit if direction == "LONG" else c.low <= take_profit
+        raakt_sl = c.low <= stop_loss if direction == "LONG" else c.high >= stop_loss
+        if raakt_tp and tp_tijd is None:
+            tp_tijd = c.timestamp
+        if raakt_sl and sl_tijd is None:
+            sl_tijd = c.timestamp
+        if tp_tijd and sl_tijd:
+            break
+    slot = later[-1].close
+    minuten = int((later[-1].timestamp - exit_time).total_seconds() // 60)
+    regels = [f"Na uitstap ({minuten} min tot slot {slot:.2f}):"]
+    if tp_tijd is None and sl_tijd is None:
+        regels.append("TP noch SL alsnog geraakt")
+    elif tp_tijd is not None and (sl_tijd is None or tp_tijd <= sl_tijd):
+        regels.append(f"TP zou geraakt zijn om {tp_tijd:%H:%M}" + (f" (SL {sl_tijd:%H:%M})" if sl_tijd else ""))
+    else:
+        regels.append(f"SL zou geraakt zijn om {sl_tijd:%H:%M}" + (f" (TP {tp_tijd:%H:%M})" if tp_tijd else ""))
+    return "\n".join(regels)
+
+
 def genereer_trade_grafiek(
     symbol: str,
     candles: list,
@@ -115,6 +144,15 @@ def genereer_trade_grafiek(
         if entry_time is not None and exit_time is not None and exit_time > entry_time:
             ax.axvspan(entry_time, exit_time, color="#ffd166", alpha=0.10, zorder=1, label="In positie")
 
+        # NIEUW (9 sep 2026, op verzoek): NABELOOP -- als er candles NA de
+        # uitstap zijn (einde-dag-grafiek), laten zien wat de koers daarna
+        # deed: was TP of SL alsnog geraakt, en hoe laat? Dat is de
+        # informatie om te beoordelen of de tijdslimiet ruimer moet.
+        nabeloop = _nabeloop_na_uitstap(candles, exit_time, direction, take_profit, stop_loss)
+        if nabeloop:
+            ax.text(0.99, 0.02, nabeloop, transform=ax.transAxes, ha="right", va="bottom", fontsize=9,
+                    bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="#888888", alpha=0.9))
+
         # Take-profit en stop-loss
         tp_kleur = "#06d6a0"
         sl_kleur = "#ef476f"
@@ -135,7 +173,7 @@ def genereer_trade_grafiek(
         resultaat_label = {
             "take_profit_hit": "TP geraakt", "stop_loss_hit": "SL geraakt",
             "forced_close_90min": "Geforceerd gesloten (90 min)",
-        }.get(result, result)
+        }.get(result, "Geforceerd gesloten (tijdslimiet)" if str(result).startswith("forced_close") else result)
 
         ax.set_title(f"{symbol} {richting_pijl} — {resultaat_label}", fontsize=13, fontweight="bold")
         ax.set_xlabel("Tijd")

@@ -19,6 +19,13 @@ Gebruik:
     cd /opt/strategy && python3 vul_grafieken_aan.py            # alleen vandaag, alleen rijen zonder grafiek
     cd /opt/strategy && python3 vul_grafieken_aan.py --alles    # hele journal
     cd /opt/strategy && python3 vul_grafieken_aan.py --opnieuw  # bestaande grafieken van vandaag opnieuw maken
+    cd /opt/strategy && python3 vul_grafieken_aan.py --einde-dag # (cron, na beurssluiting) alle trades van
+                                                                 # vandaag opnieuw met het HELE dagverloop +
+                                                                 # nabeloop-tekst (TP/SL alsnog geraakt?)
+
+OCA-groep/strategie (9 sep 2026): worden voor oude rijen teruggehaald uit
+de proceslogs ("Positie verwijderd: SYM (OCA)"); anders gereconstrueerd
+uit het naampatroon {PREFIX}_{SYM}_{RICHTING}_{entry*100}.
 """
 import json
 import csv
@@ -81,6 +88,38 @@ def tijden_uit_events(symbool, datum, volgnummer=0):
     return instap, uitstap
 
 
+def oca_uit_logs(symbool, datum):
+    patroon = re.compile(re.escape(datum) + r"[^\n]*Positie verwijderd: " + re.escape(symbool) + r" \(([A-Z]+_[^)]+)\)")
+    for pad in glob.glob("/opt/strategy/logs/*.log"):
+        try:
+            m = patroon.search(open(pad, encoding="utf-8", errors="ignore").read())
+        except Exception:
+            continue
+        if m:
+            return m.group(1)
+    return None
+
+
+def vul_oca_en_strategie(rij):
+    """Vult oca_group en strategy als ze leeg zijn. Retourneert True bij wijziging."""
+    if rij.get("oca_group") and rij.get("strategy"):
+        return False
+    symbool, datum = rij["symbol"], rij["date"]
+    oca = rij.get("oca_group") or oca_uit_logs(symbool, datum)
+    if not oca:
+        direction = rij.get("direction") or ("SHORT" if float(rij["stop_loss"]) > float(rij["entry_price"]) else "LONG")
+        prefix = "QFS" if box_uit_logs(symbool, datum) else "TTS"
+        oca = f"{prefix}_{symbool}_{direction}_{int(float(rij['entry_price']) * 100)}"
+    gewijzigd = False
+    if not rij.get("oca_group"):
+        rij["oca_group"] = oca
+        gewijzigd = True
+    if not rij.get("strategy"):
+        rij["strategy"] = oca.split("_", 1)[0]
+        gewijzigd = True
+    return gewijzigd
+
+
 def maak_grafiek(rij, volgnummer=0):
     from data_module import get_historical_candles
     from chart_module import genereer_trade_grafiek
@@ -132,7 +171,8 @@ def maak_grafiek(rij, volgnummer=0):
 
 def main():
     alles = "--alles" in sys.argv
-    opnieuw = "--opnieuw" in sys.argv
+    einde_dag = "--einde-dag" in sys.argv
+    opnieuw = "--opnieuw" in sys.argv or einde_dag
     vandaag = datetime.now().date().isoformat()
     teller = {}  # (symbool, datum) -> hoeveelste trade op die dag
     with open(JOURNAL, newline="") as f:
@@ -148,6 +188,9 @@ def main():
         teller[sleutel] = volgnummer + 1
         if not alles and rij["date"] != vandaag:
             continue
+        if "oca_group" in velden and vul_oca_en_strategie(rij):
+            print(f"  {rij['symbol']} {rij['date']}: OCA/strategie aangevuld ({rij['oca_group']})")
+            gewijzigd += 1
         if rij.get("chart") and not opnieuw:
             continue
         naam = None if opnieuw else bestaande_png(rij["symbol"], rij["date"])
