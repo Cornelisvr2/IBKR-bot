@@ -1,15 +1,17 @@
 """
-dashboard_server.py — Dagrapport-dashboard voor TTS, QFS en RVB
+dashboard_server.py — Dagrapport-dashboard voor TTS, QFS, RVB en VDB
 
-VERVANGT (9 sep 2026) het eerdere TTS-monitordashboard. Toont per dag:
-tijdlijn van de handelsdag, scorekaarten per strategie, alle trades
-met grafiek en detail, en de RVB-signalen die géén trade werden.
-Doel: de Telegram-stroom terugbrengen tot alleen alarmen.
+VERVANGT (9 sep 2026) het eerdere TTS-monitordashboard. UITGEBREID
+(9 sep 2026) met VDB (VWAP Dynamic Bounce) als vierde strategie. Toont
+per dag: tijdlijn van de handelsdag, scorekaarten per strategie, alle
+trades met grafiek en detail, en de RVB/VDB-signalen die géén trade
+werden. Doel: de Telegram-stroom terugbrengen tot alleen alarmen.
 
 Bronnen (alleen lezen):
     logs/trade_journal.csv      -- afgeronde trades (journal_module.py)
     logs/charts/*.png           -- grafieken (chart_module.py)
     logs/rvb_signals.jsonl      -- RVB-signalen incl. overgeslagen (rvb_scan.py)
+    logs/vdb_signals.jsonl      -- VDB-signalen incl. overgeslagen (vwap_bounce_scan.py)
     state.json                  -- gesimuleerd saldo (state_module.py)
 
 Uitsluitend Python-stdlib (http.server), geen extra dependencies.
@@ -46,6 +48,7 @@ LOGS_DIR = os.path.join(STRATEGY_DIR, "logs")
 JOURNAL_PATH = os.environ.get("TTS_JOURNAL_FILE", os.path.join(LOGS_DIR, "trade_journal.csv"))
 CHARTS_DIR = os.path.join(LOGS_DIR, "charts")
 SIGNALS_PATH = os.environ.get("RVB_SIGNAL_LOG", os.path.join(LOGS_DIR, "rvb_signals.jsonl"))
+VDB_SIGNALS_PATH = os.environ.get("VDB_SIGNAL_LOG", os.path.join(LOGS_DIR, "vdb_signals.jsonl"))
 STATE_PATH = os.environ.get("TTS_STATE_FILE", os.path.join(STRATEGY_DIR, "state.json"))
 EVENTS_PATH = os.environ.get("EVENT_LOG_FILE", os.path.join(LOGS_DIR, "events.jsonl"))
 HOST = os.environ.get("DASHBOARD_BIND", "127.0.0.1")   # 0.0.0.0 alleen in de Docker-Caddy-situatie, zie DASHBOARD_DEPLOY.md
@@ -55,6 +58,7 @@ STRATEGIES = {
     "TTS": ("Touch & Turn", "eerste 90 min"),
     "QFS": ("Quick Flip", "eerste 90 min"),
     "RVB": ("Relative Volume Breakout", "hele dag"),
+    "VDB": ("VWAP Dynamic Bounce", "hele dag"),
 }
 RESULT_LABELS = {
     "take_profit_hit": "Take-profit", "stop_loss_hit": "Stop-loss",
@@ -120,18 +124,26 @@ def load_trades() -> list[dict]:
 
 
 def load_signals(day: str) -> list[dict]:
-    if not os.path.exists(SIGNALS_PATH):
-        return []
+    """
+    Signalen-zonder-trade van zowel RVB als VDB (elk zijn eigen
+    logbestand, bewust niet samengevoegd tot één bestand -- elke
+    scanner schrijft alleen zijn eigen log). `strategy` wordt gezet op
+    "RVB" als het veld ontbreekt (oudere regels, vóór VDB bestond).
+    """
     out = []
-    with open(SIGNALS_PATH) as f:
-        for line in f:
-            try:
-                s = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if s.get("time", "").startswith(day):
-                out.append(s)
-    return out
+    for path, default_strategy in ((SIGNALS_PATH, "RVB"), (VDB_SIGNALS_PATH, "VDB")):
+        if not os.path.exists(path):
+            continue
+        with open(path) as f:
+            for line in f:
+                try:
+                    s = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if s.get("time", "").startswith(day):
+                    s.setdefault("strategy", default_strategy)
+                    out.append(s)
+    return sorted(out, key=lambda s: s.get("time", ""))
 
 
 def load_events(day: str) -> list[dict]:
@@ -211,7 +223,7 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 CSS = """
-:root{--paper:#eef1f4;--sheet:#fff;--ink:#18232e;--ink-2:#4c5a68;--ink-3:#8a97a4;--rule:#d6dce3;--tts:#2457a6;--qfs:#7a3e9d;--rvb:#0f8a78;--win:#1e8e5a;--loss:#c0392b;--flat:#8a97a4}
+:root{--paper:#eef1f4;--sheet:#fff;--ink:#18232e;--ink-2:#4c5a68;--ink-3:#8a97a4;--rule:#d6dce3;--tts:#2457a6;--qfs:#7a3e9d;--rvb:#0f8a78;--vdb:#b8720a;--win:#1e8e5a;--loss:#c0392b;--flat:#8a97a4}
 *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:"Segoe UI",-apple-system,"Helvetica Neue",Arial,sans-serif;font-size:15px;line-height:1.45;font-variant-numeric:tabular-nums}
 .page{max-width:1040px;margin:0 auto;padding:28px 20px 60px}
 header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:8px}header h1{font-size:26px;font-weight:600;margin:0;letter-spacing:-.01em}
@@ -219,14 +231,14 @@ header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
 .daytotal{font-size:15px;color:var(--ink-2);margin:0 0 24px}.daytotal strong{font-size:20px;font-weight:600;margin-right:6px}
 .pos{color:var(--win)}.neg{color:var(--loss)}.zero{color:var(--flat)}
 .timeline{background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:18px 20px 12px;margin-bottom:20px}.timeline h2{font-size:14px;font-weight:600;color:var(--ink-2);margin:0 0 12px}.timeline svg{width:100%;height:auto;display:block}.timeline text{font-size:11px;fill:var(--ink-3)}.tick{stroke:var(--rule)}
-.bar{rx:3}.bar.TTS{fill:var(--tts)}.bar.QFS{fill:var(--qfs)}.bar.RVB{fill:var(--rvb)}.bar.loss{opacity:.45}
-.legend{display:flex;gap:18px;font-size:12px;color:var(--ink-2);margin-top:6px;flex-wrap:wrap}.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}.legend .TTS::before{background:var(--tts)}.legend .QFS::before{background:var(--qfs)}.legend .RVB::before{background:var(--rvb)}.legend .dim::before{background:var(--ink-3);opacity:.45}
-.scores{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px}.score{background:var(--sheet);border:1px solid var(--rule);border-left-width:5px;border-radius:10px;padding:14px 16px}.score.TTS{border-left-color:var(--tts)}.score.QFS{border-left-color:var(--qfs)}.score.RVB{border-left-color:var(--rvb)}
+.bar{rx:3}.bar.TTS{fill:var(--tts)}.bar.QFS{fill:var(--qfs)}.bar.RVB{fill:var(--rvb)}.bar.VDB{fill:var(--vdb)}.bar.loss{opacity:.45}
+.legend{display:flex;gap:18px;font-size:12px;color:var(--ink-2);margin-top:6px;flex-wrap:wrap}.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}.legend .TTS::before{background:var(--tts)}.legend .QFS::before{background:var(--qfs)}.legend .RVB::before{background:var(--rvb)}.legend .VDB::before{background:var(--vdb)}.legend .dim::before{background:var(--ink-3);opacity:.45}
+.scores{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.score{background:var(--sheet);border:1px solid var(--rule);border-left-width:5px;border-radius:10px;padding:14px 16px}.score.TTS{border-left-color:var(--tts)}.score.QFS{border-left-color:var(--qfs)}.score.RVB{border-left-color:var(--rvb)}.score.VDB{border-left-color:var(--vdb)}
 .score h3{margin:0;font-size:15px;font-weight:600}.score .sub{color:var(--ink-3);font-size:12px;margin-bottom:10px}.score .pnl{font-size:24px;font-weight:600;line-height:1.1}.score dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:10px 0 0;font-size:13px}.score dt{color:var(--ink-3)}.score dd{margin:0;text-align:right}.score .wtd{border-top:1px solid var(--rule);margin-top:10px;padding-top:8px;font-size:12px;color:var(--ink-2)}
 .trades h2{font-size:16px;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline}.filters{display:flex;gap:6px}.filters button{border:1px solid var(--rule);background:var(--sheet);border-radius:999px;padding:3px 11px;font:inherit;font-size:12px;cursor:pointer;color:var(--ink-2)}.filters button[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
 .trade{background:var(--sheet);border:1px solid var(--rule);border-radius:10px;margin-bottom:8px;overflow:hidden}.trade summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:8px 52px 44px 70px 1fr 150px 90px 24px;align-items:center;gap:12px;padding:10px 14px 10px 0}.trade summary::-webkit-details-marker{display:none}.trade summary:focus-visible{outline:2px solid var(--ink-2);outline-offset:-2px}
-.swatch{align-self:stretch}.trade.TTS .swatch{background:var(--tts)}.trade.QFS .swatch{background:var(--qfs)}.trade.RVB .swatch{background:var(--rvb)}
-.t-time{color:var(--ink-2);font-size:13px}.t-strat{font-size:12px;font-weight:600;letter-spacing:.02em}.trade.TTS .t-strat{color:var(--tts)}.trade.QFS .t-strat{color:var(--qfs)}.trade.RVB .t-strat{color:var(--rvb)}.t-sym{font-weight:600}.t-desc{color:var(--ink-2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.t-result{font-size:13px}.t-pnl{text-align:right;font-weight:600}.chev{color:var(--ink-3);transition:transform .15s}.trade[open] .chev{transform:rotate(90deg)}
+.swatch{align-self:stretch}.trade.TTS .swatch{background:var(--tts)}.trade.QFS .swatch{background:var(--qfs)}.trade.RVB .swatch{background:var(--rvb)}.trade.VDB .swatch{background:var(--vdb)}
+.t-time{color:var(--ink-2);font-size:13px}.t-strat{font-size:12px;font-weight:600;letter-spacing:.02em}.trade.TTS .t-strat{color:var(--tts)}.trade.QFS .t-strat{color:var(--qfs)}.trade.RVB .t-strat{color:var(--rvb)}.trade.VDB .t-strat{color:var(--vdb)}.t-sym{font-weight:600}.t-desc{color:var(--ink-2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.t-result{font-size:13px}.t-pnl{text-align:right;font-weight:600}.chev{color:var(--ink-3);transition:transform .15s}.trade[open] .chev{transform:rotate(90deg)}
 .detail{display:grid;grid-template-columns:1fr 260px;gap:18px;padding:4px 14px 16px 20px;border-top:1px solid var(--rule)}.detail figure{margin:0}.detail img{width:100%;height:auto;border:1px solid var(--rule);border-radius:6px;background:#fbfcfd}.detail .nochart{border:1px dashed var(--rule);border-radius:6px;padding:40px;text-align:center;color:var(--ink-3);font-size:13px}.detail dl{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;font-size:13px;margin:8px 0 0}.detail dt{color:var(--ink-3)}.detail dd{margin:0}.detail .note{font-size:13px;color:var(--ink-2);margin-top:12px;padding-top:10px;border-top:1px solid var(--rule)}
 .empty{background:var(--sheet);border:1px dashed var(--rule);border-radius:10px;padding:26px;color:var(--ink-3);text-align:center}
 .signals{margin-top:26px;font-size:13px;color:var(--ink-2)}.signals h2{font-size:14px;font-weight:600;margin:0 0 6px;color:var(--ink-2)}.signals ul{margin:0;padding-left:18px}
@@ -337,9 +349,10 @@ def render(d: dict) -> str:
 
     trades = "".join(trade_html(t) for t in d["trades"]) or '<div class="empty">Geen trades. Zodra een trade sluit verschijnt hij hier met grafiek.</div>'
     sig_items = "".join(
-        f"<li>{e(s.get('time', '')[11:16])} {e(s.get('symbol', ''))} {e(s.get('direction', ''))} — {e(s.get('reason', 'overgeslagen'))}</li>"
+        f"<li>{e(s.get('time', '')[11:16])} <strong>{e(s.get('strategy', ''))}</strong> {e(s.get('symbol', ''))} "
+        f"{e(s.get('direction', ''))} — {e(s.get('reason', 'overgeslagen'))}</li>"
         for s in d["signals_skipped"])
-    signals = f'<section class="signals"><h2>RVB-signalen zonder trade ({len(d["signals_skipped"])})</h2><ul>{sig_items}</ul></section>' if sig_items else ""
+    signals = f'<section class="signals"><h2>Signalen zonder trade ({len(d["signals_skipped"])})</h2><ul>{sig_items}</ul></section>' if sig_items else ""
 
     LVL = {"urgent": "Urgent", "warning": "Let op", "info": "Info"}
     order = {"urgent": 0, "warning": 1, "info": 2}
@@ -359,12 +372,12 @@ def render(d: dict) -> str:
 <header><h1>{e(titel)}</h1><nav class="daynav" aria-label="Dag kiezen">{nav_prev}{nav_next}</nav></header>
 <p class="daytotal">{daytotal}</p>
 <section class="timeline" aria-label="Verloop van de handelsdag"><h2>Handelsdag 15:30–22:00 CEST</h2>{timeline_svg(d['trades'])}
-<div class="legend"><span class="TTS">Touch &amp; Turn</span><span class="QFS">Quick Flip</span><span class="RVB">Relative Volume Breakout</span><span class="dim">Verliestrade (transparant, onder de lijn)</span></div></section>
+<div class="legend"><span class="TTS">Touch &amp; Turn</span><span class="QFS">Quick Flip</span><span class="RVB">Relative Volume Breakout</span><span class="VDB">VWAP Dynamic Bounce</span><span class="dim">Verliestrade (transparant, onder de lijn)</span></div></section>
 <section class="scores" aria-label="Resultaat per strategie">{''.join(cards)}</section>
 <section class="trades"><h2>Trades van deze dag<div class="filters" role="group" aria-label="Filter op strategie">
-<button type="button" aria-pressed="true" data-f="all">Alle</button><button type="button" aria-pressed="false" data-f="TTS">TTS</button><button type="button" aria-pressed="false" data-f="QFS">QFS</button><button type="button" aria-pressed="false" data-f="RVB">RVB</button></div></h2>
+<button type="button" aria-pressed="true" data-f="all">Alle</button><button type="button" aria-pressed="false" data-f="TTS">TTS</button><button type="button" aria-pressed="false" data-f="QFS">QFS</button><button type="button" aria-pressed="false" data-f="RVB">RVB</button><button type="button" aria-pressed="false" data-f="VDB">VDB</button></div></h2>
 {trades}</section>{signals}{events_html}
-<p class="footer">Bron: trade_journal.csv, events.jsonl, rvb_signals.jsonl en logs/charts. Pagina gegenereerd {d['generated_at']}.</p>
+<p class="footer">Bron: trade_journal.csv, events.jsonl, rvb_signals.jsonl, vdb_signals.jsonl en logs/charts. Pagina gegenereerd {d['generated_at']}.</p>
 </div><script>{JS}</script></body></html>"""
 
 

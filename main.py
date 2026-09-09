@@ -280,7 +280,7 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     # draaien op ALLE gekozen aandelen, om ze onderling te kunnen
     # vergelijken -- de Fibonacci-flow (run_symbol_cycle, OCA-prefix
     # "TTS_") en de bevestigingsflow (run_reversal_symbol_cycle,
-    # OCA-prefix "TT2_") zijn al los van elkaar herkenbaar in de
+    # OCA-prefix "QFS_") zijn al los van elkaar herkenbaar in de
     # journal, dus geen aanpassing nodig aan de CSV-structuur zelf om
     # ze achteraf te kunnen scheiden. Bewust GEEN limiet en GEEN
     # opsplitsing van de watchlist (op uitdrukkelijk verzoek) -- meer
