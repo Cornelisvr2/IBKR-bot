@@ -120,7 +120,6 @@ def run_scan(dry_run: bool = True) -> dict:
     from data_module import get_historical_candles
     from rvb_strategy_module import scan_symbol, build_rvb_trade, ORB_END_TIME
     from rvb_baseline_builder import load_baseline
-    from state_module import get_simulated_balance
 
     now = datetime.now()
     samenvatting = {"scanned": 0, "signals": 0, "dispatched": 0, "skipped": []}
@@ -142,12 +141,14 @@ def run_scan(dry_run: bool = True) -> dict:
         return samenvatting
 
     traded = load_traded_today()
-    capital = get_simulated_balance()
+    from state_module import get_strategy_balance
+    capital = get_strategy_balance("RVB")
 
-    # Kapitaal per trade: hetzelfde compounding-saldo als TTS/QFS. De
-    # VIX-allocatie (risk_module) is bewust NIET toegepast in de MVP --
-    # RVB deelt nog geen budget met de andere strategieën; dat is een
-    # bewuste, latere keuze zodra de A/B-cijfers er zijn.
+    # Kapitaal per trade: RVB's EIGEN, onafhankelijke compounding-saldo
+    # (9 sep 2026 -- voorheen deelde RVB nog het generieke gesimuleerde
+    # saldo met TTS/QFS/VIX Rider, wat de A/B/C/D-vergelijking
+    # vervuilde). De VIX-allocatie (risk_module) is bewust NIET
+    # toegepast in de MVP -- dat blijft een latere, bewuste keuze.
 
     nieuwe_trades = 0
     for symbol in FALLBACK_WATCHLIST:

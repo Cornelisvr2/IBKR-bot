@@ -571,10 +571,20 @@ def report_trade_outcome(spec: BracketOrderSpec, symbol: str, outcome: dict, ent
     # hier het BRUTO bedrag gebruikt, wat het saldo te optimistisch
     # liet compounden -- fees zijn een reëel, terugkerend verlies op
     # elke trade, ongeacht de uitkomst.
+    #
+    # PER-STRATEGIE GESPLITST (9 sep 2026): voorheen werd hier altijd
+    # het ÉÉN-op-ÉÉN gedeelde saldo bijgewerkt (update_simulated_balance),
+    # ongeacht welke strategie de trade deed -- daardoor beïnvloedde een
+    # verlies van bijv. TTS de positiegrootte van QFS/RVB/VDB, wat een
+    # eerlijke A/B/C/D-vergelijking onmogelijk maakte. Nu wordt de
+    # strategie afgeleid (spec.strategy, of anders het OCA-prefix -- zelfde
+    # aanpak als het dashboard al gebruikte) en alleen HAAR EIGEN saldo
+    # bijgewerkt.
     try:
-        from state_module import update_simulated_balance
+        from state_module import update_strategy_balance
         if pnl_net is not None:
-            update_simulated_balance(pnl_net)
+            strategie_code = spec.strategy or (spec.oca_group.split("_", 1)[0] if spec.oca_group else "TTS")
+            update_strategy_balance(strategie_code, pnl_net)
     except Exception as e:
         logger.error(f"Kon gesimuleerd saldo niet bijwerken voor {symbol}: {e}")
 

@@ -118,7 +118,7 @@ def run_scan(dry_run: bool = True) -> dict:
     from news_module import FALLBACK_WATCHLIST
     from data_module import get_historical_candles
     from vwap_bounce_module import scan_symbol, build_vdb_trade
-    from state_module import get_simulated_balance
+    from state_module import get_strategy_balance
 
     now = datetime.now()
     samenvatting = {"scanned": 0, "signals": 0, "dispatched": 0, "skipped": []}
@@ -135,12 +135,11 @@ def run_scan(dry_run: bool = True) -> dict:
         return samenvatting
 
     traded = load_traded_today()
-    capital = get_simulated_balance()
+    capital = get_strategy_balance("VDB")
 
-    # Kapitaal per trade: hetzelfde compounding-saldo als TTS/QFS/RVB.
-    # De VIX-allocatie (risk_module) is bewust NIET toegepast in de MVP
-    # -- VDB deelt nog geen budget met de andere strategieën, net als
-    # bij RVB, tot de A/B-cijfers er zijn.
+    # Kapitaal per trade: VDB's EIGEN, onafhankelijke compounding-saldo
+    # (9 sep 2026 -- zelfde aanpak als bij RVB). De VIX-allocatie
+    # (risk_module) is bewust NIET toegepast in de MVP.
 
     nieuwe_trades = 0
     for symbol in FALLBACK_WATCHLIST:

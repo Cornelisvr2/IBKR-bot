@@ -102,8 +102,16 @@ def get_simulated_balance(path: str = None) -> float:
     """
     Haalt het huidige gesimuleerde saldo op -- start op
     STARTING_SIMULATED_BALANCE (€2000) en wordt bijgewerkt na elke
-    gesloten trade (zowel scalper als VIX Rider, want het is
-    conceptueel dezelfde inleg die via de VIX-schaal verdeeld wordt).
+    gesloten trade van de VIX Rider (macro_panic), want die deelt
+    conceptueel dezelfde inleg met de scalper via de VIX-schaal
+    (risk_module.get_dynamic_allocation).
+
+    LET OP (9 sep 2026): TTS, QFS, RVB en VDB gebruiken dit NIET meer
+    -- die hebben elk hun EIGEN, onafhankelijke compounding-saldo
+    gekregen (zie get_strategy_balance/update_strategy_balance
+    hieronder), zodat ze eerlijk (zonder onderlinge beïnvloeding via
+    een gedeelde pot) met elkaar vergeleken kunnen worden. Dit veld
+    blijft uitsluitend voor VIX Rider bestaan.
 
     Dit is compounding: winst/verlies wordt herbelegd, dus de
     positiegrootte-berekeningen van morgen zijn gebaseerd op het
@@ -115,9 +123,10 @@ def get_simulated_balance(path: str = None) -> float:
 
 def update_simulated_balance(pnl: float, path: str = None) -> float:
     """
-    Werkt het gesimuleerde saldo bij met het resultaat van een
-    afgeronde trade (compounding). Aan te roepen door ELKE strategie
-    zodra een trade sluit (TP/SL/trailing-stop geraakt).
+    Werkt het VIX Rider-saldo bij met het resultaat van een afgeronde
+    trade (compounding). Zie de LET OP in get_simulated_balance() --
+    TTS/QFS/RVB/VDB gebruiken sinds 9 sep 2026 update_strategy_balance()
+    in plaats van deze functie.
 
     Returns:
         Het NIEUWE saldo, na verwerking van deze trade.
@@ -128,6 +137,53 @@ def update_simulated_balance(pnl: float, path: str = None) -> float:
     state["simulated_balance"] = new_balance
     save_state(state, path)
     logger.info(f"Gesimuleerd saldo bijgewerkt: €{current_balance:.2f} {'+' if pnl >= 0 else ''}{pnl:.2f} -> €{new_balance:.2f}")
+    return new_balance
+
+
+# ---------------------------------------------------------------------------
+# Per-strategie compounding-saldi (9 sep 2026)
+# ---------------------------------------------------------------------------
+# TTS, QFS, RVB en VDB draaiden tot nu toe allemaal op ÉÉN gedeeld
+# gesimuleerd saldo (get_simulated_balance() hierboven) -- dat betekende
+# dat een verlies van de ene strategie de positiegrootte van een ANDERE
+# strategie liet krimpen, puur via het gedeelde compounding-saldo. Voor
+# een eerlijke A/B/C/D-vergelijking krijgt elke strategie nu zijn EIGEN,
+# volledig onafhankelijke startsaldo van €2000, opgeslagen onder
+# "strategy_balances" in state.json (los van "simulated_balance", dat
+# uitsluitend voor VIX Rider blijft bestaan).
+
+STRATEGY_STARTING_BALANCE = 2000.0
+
+
+def get_strategy_balance(strategy: str, path: str = None) -> float:
+    """
+    Haalt het gesimuleerde saldo van ÉÉN specifieke strategie op
+    (bijv. "TTS", "QFS", "RVB", "VDB"). Onbekende strategieën starten
+    automatisch op STRATEGY_STARTING_BALANCE (€2000) bij de eerste
+    aanroep -- geen aparte "registratie"-stap nodig voor een nieuwe
+    strategie.
+    """
+    state = load_state(path)
+    balances = state.get("strategy_balances", {})
+    return balances.get(strategy, STRATEGY_STARTING_BALANCE)
+
+
+def update_strategy_balance(strategy: str, pnl: float, path: str = None) -> float:
+    """
+    Werkt het gesimuleerde saldo van ÉÉN specifieke strategie bij met
+    het resultaat van een afgeronde trade (onafhankelijk compounding
+    -- raakt de saldi van de andere strategieën niet aan).
+
+    Returns:
+        Het NIEUWE saldo van deze strategie, na verwerking van deze trade.
+    """
+    state = load_state(path)
+    balances = state.setdefault("strategy_balances", {})
+    current_balance = balances.get(strategy, STRATEGY_STARTING_BALANCE)
+    new_balance = current_balance + pnl
+    balances[strategy] = new_balance
+    save_state(state, path)
+    logger.info(f"Gesimuleerd saldo [{strategy}] bijgewerkt: €{current_balance:.2f} {'+' if pnl >= 0 else ''}{pnl:.2f} -> €{new_balance:.2f}")
     return new_balance
 
 

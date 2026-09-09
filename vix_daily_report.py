@@ -55,26 +55,51 @@ def send_daily_vix_report(total_capital: float = 2000.0) -> dict:
     scalper_capital = total_capital * allocation["scalper_pct"]
     vix_rider_capital = total_capital * allocation["macro_panic_pct"]
 
-    if allocation["scalper_pct"] == 1.0:
-        besluit = "Alleen Touch & Turn Scalper handelt vandaag (lage volatiliteit)."
-    elif allocation["macro_panic_pct"] == 1.0:
-        besluit = "Alleen VIX Rider handelt vandaag (hoge volatiliteit)."
-    else:
-        besluit = "Beide strategieën handelen vandaag, met verdeeld kapitaal."
+    # VERWIJDERD (9 sep 2026, op verzoek): de regel "Alleen Touch & Turn
+    # Scalper handelt vandaag" (en de "Alleen VIX Rider"/"Beide
+    # strategieën"-varianten) was ACHTERHAALD -- die klopte alleen toen
+    # TTS en VIX Rider de enige twee strategieën waren. Sinds QFS, RVB
+    # en VDB zijn toegevoegd (die ONAFHANKELIJK van deze VIX-schaal
+    # handelen, met hun eigen saldo) suggereerde die zin ten onrechte
+    # dat er die dag maar één strategie actief zou zijn.
 
     message = (
         f"📊 Dagelijks VIX-rapport\n\n"
         f"VIX: {vix:.2f}\n\n"
-        f"{besluit}\n\n"
         f"Touch & Turn Scalper: {allocation['scalper_pct']*100:.0f}% "
         f"(€{scalper_capital:,.2f})\n"
         f"VIX Rider: {allocation['macro_panic_pct']*100:.0f}% "
         f"(€{vix_rider_capital:,.2f})"
     )
     send_telegram_message(urgent=True, text=message)
-    logger.info(f"Dagelijks VIX-rapport verstuurd: VIX={vix:.2f}, {besluit}")
+    logger.info(f"Dagelijks VIX-rapport verstuurd: VIX={vix:.2f}, scalper_pct={allocation['scalper_pct']}")
+
+    # NIEUW (9 sep 2026, op verzoek): de VIX-waarde ook wegschrijven naar
+    # een logbestand, zodat het dashboard 'm kan tonen zonder zelf een
+    # live IBKR-aanroep te hoeven doen (dashboard_server.py is bewust
+    # een pure log-lezer, zie de moduledocstring daar).
+    _log_vix_report(vix, allocation)
 
     return {"vix": vix, **allocation}
+
+
+def _log_vix_report(vix: float, allocation: dict) -> None:
+    import json
+    import os
+    from datetime import datetime
+
+    path = os.environ.get("VIX_REPORT_LOG", "/opt/strategy/logs/vix_daily.jsonl")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps({
+                "time": datetime.now().isoformat(timespec="seconds"),
+                "vix": vix,
+                "scalper_pct": allocation["scalper_pct"],
+                "macro_panic_pct": allocation["macro_panic_pct"],
+            }) + "\n")
+    except Exception as e:
+        logger.warning(f"Kon VIX-rapport niet naar logbestand schrijven: {e}")
 
 
 if __name__ == "__main__":

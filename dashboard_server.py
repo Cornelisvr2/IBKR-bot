@@ -12,7 +12,8 @@ Bronnen (alleen lezen):
     logs/charts/*.png           -- grafieken (chart_module.py)
     logs/rvb_signals.jsonl      -- RVB-signalen incl. overgeslagen (rvb_scan.py)
     logs/vdb_signals.jsonl      -- VDB-signalen incl. overgeslagen (vwap_bounce_scan.py)
-    state.json                  -- gesimuleerd saldo (state_module.py)
+    logs/vix_daily.jsonl        -- dagelijkse VIX-waarde (vix_daily_report.py)
+    state.json                  -- per-strategie gesimuleerde saldi (state_module.py)
 
 Uitsluitend Python-stdlib (http.server), geen extra dependencies.
 Luistert ALLEEN op 127.0.0.1:8899 -- Caddy (zie Caddyfile.ibkr) zet er
@@ -49,6 +50,7 @@ JOURNAL_PATH = os.environ.get("TTS_JOURNAL_FILE", os.path.join(LOGS_DIR, "trade_
 CHARTS_DIR = os.path.join(LOGS_DIR, "charts")
 SIGNALS_PATH = os.environ.get("RVB_SIGNAL_LOG", os.path.join(LOGS_DIR, "rvb_signals.jsonl"))
 VDB_SIGNALS_PATH = os.environ.get("VDB_SIGNAL_LOG", os.path.join(LOGS_DIR, "vdb_signals.jsonl"))
+VIX_REPORT_PATH = os.environ.get("VIX_REPORT_LOG", os.path.join(LOGS_DIR, "vix_daily.jsonl"))
 STATE_PATH = os.environ.get("TTS_STATE_FILE", os.path.join(STRATEGY_DIR, "state.json"))
 EVENTS_PATH = os.environ.get("EVENT_LOG_FILE", os.path.join(LOGS_DIR, "events.jsonl"))
 HOST = os.environ.get("DASHBOARD_BIND", "127.0.0.1")   # 0.0.0.0 alleen in de Docker-Caddy-situatie, zie DASHBOARD_DEPLOY.md
@@ -162,12 +164,40 @@ def load_events(day: str) -> list[dict]:
     return out
 
 
-def load_balance() -> float | None:
+def load_vix_report(day: str) -> dict | None:
+    """
+    Laatst bekende VIX-rapport van de gegeven dag (er kan er maar één
+    per dag zijn, via cron -- maar als het script ooit dubbel draait,
+    pakken we bewust de LAATSTE regel).
+    """
+    if not os.path.exists(VIX_REPORT_PATH):
+        return None
+    laatste = None
+    with open(VIX_REPORT_PATH) as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("time", "").startswith(day):
+                laatste = r
+    return laatste
+
+
+def load_strategy_balances() -> dict:
+    """
+    Per-strategie compounding-saldi (9 sep 2026) -- elke strategie in
+    STRATEGIES heeft sinds de A/B/C/D-fairness-fix zijn EIGEN,
+    onafhankelijke saldo (state_module.get_strategy_balance), i.p.v.
+    één gedeeld "simulated_balance"-veld (dat nu uitsluitend nog voor
+    VIX Rider bestaat, welke niet op dit dashboard staat).
+    """
     try:
         with open(STATE_PATH) as f:
-            return float(json.load(f).get("simulated_balance"))
+            balances = json.load(f).get("strategy_balances", {})
     except Exception:
-        return None
+        balances = {}
+    return {code: balances.get(code, 2000.0) for code in STRATEGIES}
 
 
 # ---------------------------------------------------------------------------
@@ -193,12 +223,13 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
     d20_trades = [t for t in all_trades if t["date"] in trading_days]
 
     per_strategy = {}
+    balances = load_strategy_balances()
     for code in STRATEGIES:
         mine = lambda ts: [t for t in ts if t["strategy"] == code]
         first = min((t["date"] for t in all_trades if t["strategy"] == code), default=None)
         per_strategy[code] = {
             "day": summarize(mine(day_trades)), "week": summarize(mine(week_trades)),
-            "d20": summarize(mine(d20_trades)), "first_date": first,
+            "d20": summarize(mine(d20_trades)), "first_date": first, "balance": balances[code],
         }
 
     signals = load_signals(iso)
@@ -209,8 +240,9 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
     return {
         "date": iso, "trades": sorted(day_trades, key=lambda t: t["entry_time"]),
         "total": summarize(day_trades), "week": summarize(week_trades),
-        "per_strategy": per_strategy, "balance": load_balance(),
+        "per_strategy": per_strategy, "balance": round(sum(balances.values()), 2),
         "signals_skipped": [s for s in signals if s.get("status") == "skipped"],
+        "vix": load_vix_report(iso),
         "events": events,
         "event_counts": {lvl: sum(1 for e in events if e.get("level") == lvl) for lvl in ("urgent", "warning", "info")},
         "prev_date": prev_days[-1] if prev_days else None, "next_date": next_days[0] if next_days else None,
@@ -231,6 +263,7 @@ header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
 .daytotal{font-size:15px;color:var(--ink-2);margin:0 0 24px}.daytotal strong{font-size:20px;font-weight:600;margin-right:6px}
 .pos{color:var(--win)}.neg{color:var(--loss)}.zero{color:var(--flat)}
 .timeline{background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:18px 20px 12px;margin-bottom:20px}.timeline h2{font-size:14px;font-weight:600;color:var(--ink-2);margin:0 0 12px}.timeline svg{width:100%;height:auto;display:block}.timeline text{font-size:11px;fill:var(--ink-3)}.tick{stroke:var(--rule)}
+.vix-badge{font-weight:400;color:var(--ink-3);font-size:12px}
 .bar{rx:3}.bar.TTS{fill:var(--tts)}.bar.QFS{fill:var(--qfs)}.bar.RVB{fill:var(--rvb)}.bar.VDB{fill:var(--vdb)}.bar.loss{opacity:.45}
 .legend{display:flex;gap:18px;font-size:12px;color:var(--ink-2);margin-top:6px;flex-wrap:wrap}.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}.legend .TTS::before{background:var(--tts)}.legend .QFS::before{background:var(--qfs)}.legend .RVB::before{background:var(--rvb)}.legend .VDB::before{background:var(--vdb)}.legend .dim::before{background:var(--ink-3);opacity:.45}
 .scores{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.score{background:var(--sheet);border:1px solid var(--rule);border-left-width:5px;border-radius:10px;padding:14px 16px}.score.TTS{border-left-color:var(--tts)}.score.QFS{border-left-color:var(--qfs)}.score.RVB{border-left-color:var(--rvb)}.score.VDB{border-left-color:var(--vdb)}
@@ -331,7 +364,10 @@ def render(d: dict) -> str:
     tot, wk = d["total"], d["week"]
     nav_prev = f'<a href="/?date={d["prev_date"]}">← {d["prev_date"][5:]}</a>' if d["prev_date"] else '<span>← eerder</span>'
     nav_next = f'<a href="/?date={d["next_date"]}">{d["next_date"][5:]} →</a>' if d["next_date"] else '<span>later →</span>'
-    saldo = f" · saldo {eur(d['balance'], sign=False)}" if d["balance"] is not None else ""
+    saldo = f" · totaal saldo {eur(d['balance'], sign=False)} (4x €2.000 basis)" if d["balance"] is not None else ""
+    v = d.get("vix")
+    vix_badge = (f' <span class="vix-badge">VIX {v["vix"]:.2f} · TTS/QFS {v["scalper_pct"]*100:.0f}% '
+                f'· VIX Rider {v["macro_panic_pct"]*100:.0f}%</span>') if v else ""
     daytotal = (f'<strong class="{cls(tot["pnl"])}">{eur(tot["pnl"])}</strong> netto over {tot["trades"]} trades '
                 f'({tot["wins"]} winst, {tot["losses"]} verlies){saldo} · week {eur(wk["pnl"])}') if tot["trades"] else "Geen afgeronde trades op deze dag."
 
@@ -344,7 +380,7 @@ def render(d: dict) -> str:
         sinds = f" · sinds {s['first_date']}" if s["first_date"] else ""
         cards.append(f"""<article class="score {code}"><h3>{e(naam)}</h3><div class="sub">{code} · {venster}</div>
 <div class="pnl {cls(dd['pnl'])}">{eur(dd['pnl'])}</div>
-<dl><dt>Trades</dt><dd>{dd['trades']} ({dd['wins']} winst)</dd><dt>Gem. R</dt><dd>{avg_r}</dd><dt>Winrate 20d</dt><dd>{wr}</dd></dl>
+<dl><dt>Trades</dt><dd>{dd['trades']} ({dd['wins']} winst)</dd><dt>Gem. R</dt><dd>{avg_r}</dd><dt>Winrate 20d</dt><dd>{wr}</dd><dt>Saldo</dt><dd>{eur(s['balance'], sign=False)}</dd></dl>
 <div class="wtd">Deze week {eur(ww['pnl'])} · 20 dagen {eur(d20['pnl'])}{sinds}</div></article>""")
 
     trades = "".join(trade_html(t) for t in d["trades"]) or '<div class="empty">Geen trades. Zodra een trade sluit verschijnt hij hier met grafiek.</div>'
@@ -371,7 +407,7 @@ def render(d: dict) -> str:
 <title>Dagrapport — {e(titel)}</title><style>{CSS}</style></head><body><div class="page">
 <header><h1>{e(titel)}</h1><nav class="daynav" aria-label="Dag kiezen">{nav_prev}{nav_next}</nav></header>
 <p class="daytotal">{daytotal}</p>
-<section class="timeline" aria-label="Verloop van de handelsdag"><h2>Handelsdag 15:30–22:00 CEST</h2>{timeline_svg(d['trades'])}
+<section class="timeline" aria-label="Verloop van de handelsdag"><h2>Handelsdag 15:30–22:00 CEST{vix_badge}</h2>{timeline_svg(d['trades'])}
 <div class="legend"><span class="TTS">Touch &amp; Turn</span><span class="QFS">Quick Flip</span><span class="RVB">Relative Volume Breakout</span><span class="VDB">VWAP Dynamic Bounce</span><span class="dim">Verliestrade (transparant, onder de lijn)</span></div></section>
 <section class="scores" aria-label="Resultaat per strategie">{''.join(cards)}</section>
 <section class="trades"><h2>Trades van deze dag<div class="filters" role="group" aria-label="Filter op strategie">

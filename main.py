@@ -221,10 +221,20 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     """
     logger.info(f"=== Start cyclus ({'DRY-RUN' if dry_run else 'LIVE'}) ===")
 
-    if capital is None:
-        from state_module import get_simulated_balance
-        capital = get_simulated_balance()
-        logger.info(f"Compounding-kapitaal opgehaald: €{capital:.2f}")
+    # PER-STRATEGIE SALDI (9 sep 2026): TTS en QFS draaiden tot nu toe
+    # BEIDE op hetzelfde `allocated_capital`-getal binnen één cyclus --
+    # ook al waren het twee te vergelijken strategieën, ze deelden
+    # feitelijk nog steeds één pot. Nu haalt elke strategie zijn EIGEN
+    # onafhankelijke compounding-saldo op (get_strategy_balance), zodat
+    # een verlies bij TTS de positiegrootte van QFS niet meer raakt en
+    # omgekeerd. Het `capital`-argument van deze functie is nog puur
+    # voor losse tests met een vast bedrag; in de normale (cron-)flow
+    # wordt het genegeerd ten gunste van de per-strategie saldi.
+    from state_module import get_strategy_balance
+    strategie_saldi = {"TTS": get_strategy_balance("TTS"), "QFS": get_strategy_balance("QFS")}
+    if capital is not None:
+        strategie_saldi = {"TTS": capital, "QFS": capital}
+    logger.info(f"Saldi per strategie: TTS €{strategie_saldi['TTS']:.2f} · QFS €{strategie_saldi['QFS']:.2f}")
 
     state = load_state()
     if not state["trading_enabled"]:
@@ -236,11 +246,15 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     # want de VIX-check vereist een live Gateway-sessie. In dry-run
     # slaan we dit over zodat je de rest van de keten kunt blijven
     # testen zonder IBKR-afhankelijkheid.
-    allocated_capital = capital  # standaard: volledig kapitaal (dry-run of als allocatie faalt)
+    #
+    # De 3%-dagstop is bewust een GLOBALE, gedeelde veiligheidsrem (niet
+    # per strategie) -- daarom wordt hier de SOM van beide saldi als
+    # referentie gebruikt, ook al compounden ze verder onafhankelijk.
     if not dry_run:
         from risk_module import check_circuit_breakers, get_allocated_capital
 
-        breaker_result = check_circuit_breakers(capital=capital)
+        totaal_referentie = strategie_saldi["TTS"] + strategie_saldi["QFS"]
+        breaker_result = check_circuit_breakers(capital=totaal_referentie)
         if not breaker_result["safe_to_trade"]:
             logger.warning(f"Circuit breaker actief: {breaker_result['reason']}")
             return {"status": "circuit_breaker_triggered", "reason": breaker_result["reason"]}
@@ -249,16 +263,19 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
         # allocatie (risk_module.get_dynamic_allocation) werd berekend
         # en getest, maar NOOIT daadwerkelijk toegepast op de
         # positiegrootte -- de scalper gebruikte tot nu toe altijd het
-        # volledige kapitaal, ongeacht de VIX-stand. Nu wel:
-        allocation = get_allocated_capital(capital, "scalper")
-        allocated_capital = allocation["allocated_capital"]
-        logger.info(
-            f"VIX-allocatie toegepast: €{allocated_capital:.2f} van €{capital:.2f} "
-            f"({allocation['allocation_pct']*100:.0f}%, VIX {allocation['vix']})"
-        )
+        # volledige kapitaal, ongeacht de VIX-stand. Nu wel -- en sinds
+        # 9 sep 2026 toegepast op ELK van de twee EIGEN saldi apart
+        # (dezelfde VIX-drempel geldt voor beide, elk op zijn eigen basis).
+        for code in ("TTS", "QFS"):
+            allocation = get_allocated_capital(strategie_saldi[code], "scalper")
+            strategie_saldi[code] = allocation["allocated_capital"]
+            logger.info(
+                f"VIX-allocatie toegepast op {code}: €{strategie_saldi[code]:.2f} van €{get_strategy_balance(code):.2f} "
+                f"({allocation['allocation_pct']*100:.0f}%, VIX {allocation['vix']})"
+            )
 
-        if allocated_capital <= 0:
-            reason = f"Geen kapitaal toegewezen aan de scalper (VIX-allocatie 0%) -- cyclus overgeslagen."
+        if strategie_saldi["TTS"] <= 0 and strategie_saldi["QFS"] <= 0:
+            reason = "Geen kapitaal toegewezen aan TTS of QFS (VIX-allocatie 0%) -- cyclus overgeslagen."
             logger.info(reason)
             return {"status": "skipped", "reason": reason}
 
@@ -288,8 +305,10 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
     # netwerkverkeer.
     taken_lijst = []
     for symbool, reden in chosen:
-        taken_lijst.append((symbool, reden, "TTS"))
-        taken_lijst.append((symbool, reden, "QFS"))
+        if strategie_saldi["TTS"] > 0:
+            taken_lijst.append((symbool, reden, "TTS"))
+        if strategie_saldi["QFS"] > 0:
+            taken_lijst.append((symbool, reden, "QFS"))
 
     # NIEUW (2 sep 2026, bugfix): bij de volledige-watchlist-scan (26
     # symbolen) veroorzaakte het gelijktijdig starten van ALLE taken
@@ -315,9 +334,9 @@ def run_cycle(capital: float = None, dry_run: bool = True, max_trades: int = 3) 
             logger.info(f"--- Symbool: {symbol} ({news_reason}) [{strategie}] ---")
             try:
                 if strategie == "TTS":
-                    resultaat = await asyncio.to_thread(run_symbol_cycle, symbol, allocated_capital, dry_run)
+                    resultaat = await asyncio.to_thread(run_symbol_cycle, symbol, strategie_saldi["TTS"], dry_run)
                 else:
-                    resultaat = await asyncio.to_thread(run_reversal_symbol_cycle, symbol, allocated_capital, dry_run)
+                    resultaat = await asyncio.to_thread(run_reversal_symbol_cycle, symbol, strategie_saldi["QFS"], dry_run)
                 resultaat["strategie"] = strategie
                 return resultaat
             except Exception as e:
