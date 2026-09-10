@@ -97,6 +97,44 @@ def ensure_session() -> bool:
     return ok
 
 
+# NIEUW (10 sep 2026): begrenzing van GELIJKTIJDIGE posities per strategie.
+# Zonder deze rem kon de scanner (2 nieuwe trades per 5-min-run) op een
+# drukke dag vijf of meer posities van elk 50% van het saldo openen --
+# 250% ingezet, buiten elk kapitaalmodel. Met de 50%-positie-cap is
+# 2 open posities precies het volledige strategiesaldo.
+MAX_OPEN_POSITIONS = 2
+PENDING_ENTRY_MINUTES = 15   # = max_fill_wait in het standalone-script: zolang telt een
+                             # gedispatchte-maar-nog-niet-gevulde order als "bezet"
+
+
+def open_of_pending(traded: dict, strategy: str) -> int:
+    """
+    Open posities (state.json, op OCA-voorvoegsel) + vandaag gedispatchte
+    trades die nog binnen hun entry-wachttijd zitten en nog geen positie
+    in state.json hebben (de order staat dus mogelijk nog open).
+    """
+    from state_module import count_open_positions, load_state
+    try:
+        open_pos = count_open_positions(strategy)
+        state_syms = {p.get("symbol") for p in load_state().get("positions", [])
+                      if str(p.get("oca_group", "")).startswith(strategy + "_")}
+    except Exception as e:
+        logger.warning(f"Kon open posities niet bepalen ({e}) -- neem 0 aan.")
+        open_pos, state_syms = 0, set()
+    nu = datetime.now()
+    pending = 0
+    for sym, info in traded.get("symbols", {}).items():
+        if info.get("status") != "dispatched" or sym in state_syms:
+            continue
+        try:
+            leeftijd = (nu - datetime.fromisoformat(info["time"])).total_seconds() / 60
+        except Exception:
+            continue
+        if leeftijd <= PENDING_ENTRY_MINUTES:
+            pending += 1
+    return open_pos + pending
+
+
 def dispatch_trade(trade: dict, signal_info: dict, dry_run: bool) -> None:
     cmd = [
         sys.executable, os.path.join(STRATEGY_DIR, "execute_vwap_bounce_trade_standalone.py"),
@@ -158,6 +196,20 @@ def run_scan(dry_run: bool = True) -> dict:
         if signal is None:
             continue
         samenvatting["signals"] += 1
+
+        bezet = open_of_pending(traded, "VDB")
+        if bezet >= MAX_OPEN_POSITIONS:
+            reden = f"max open posities bereikt ({bezet}/{MAX_OPEN_POSITIONS})"
+            logger.info(f"{symbol}: signaal maar geen trade -- {reden}")
+            mark_traded(traded, symbol, {"status": "skipped", "reason": reden,
+                                         "direction": signal.direction, "entry": signal.trigger_price})
+            try:
+                from telegram_notify import log_decision
+                log_decision(f"⏸️ VDB {signal.direction} {symbol}: signaal @ {signal.trigger_price:.2f} overgeslagen -- {reden}",
+                             strategy="VDB", symbol=symbol)
+            except Exception:
+                pass
+            continue
 
         try:
             trade = build_vdb_trade(signal, capital)

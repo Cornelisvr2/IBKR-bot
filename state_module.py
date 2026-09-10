@@ -240,6 +240,17 @@ def remove_position(symbol: str, oca_group: str = None, path: str = None) -> dic
     return state
 
 
+def count_open_positions(strategy_prefix: str, path: str = None) -> int:
+    """
+    NIEUW (10 sep 2026): aantal open posities van één strategie, geteld
+    op het OCA-voorvoegsel (TTS_/QFS_/RVB_/VDB_). Gebruikt door de
+    RVB/VDB-scanners om het aantal gelijktijdige posities te begrenzen.
+    """
+    state = load_state(path)
+    pref = strategy_prefix.rstrip("_") + "_"
+    return sum(1 for pos in state.get("positions", []) if str(pos.get("oca_group", "")).startswith(pref))
+
+
 def add_trade_to_log(trade_summary: dict, path: str = None) -> dict:
     """
     Voegt een afgeronde trade toe aan de log. Gebruikt door order_module
