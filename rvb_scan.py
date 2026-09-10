@@ -181,6 +181,8 @@ def run_scan(dry_run: bool = True) -> dict:
         # Eerst markeren, dan pas dispatchen -- nooit andersom.
         mark_traded(traded, symbol, {"status": "dry-run" if dry_run else "dispatched",
                                      "direction": trade["direction"], "entry": trade["entry_price"],
+                                     "take_profit": trade["take_profit"], "stop_loss": trade["stop_loss"],
+                                     "quantity": trade["quantity"],
                                      "volume_ratio": signal.volume_ratio})
         _notify(
             f"{'🧪 [DRY-RUN] ' if dry_run else '📡 '}RVB {trade['direction']} {symbol}: close {signal.trigger_price:.2f} "

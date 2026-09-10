@@ -64,7 +64,7 @@ STRATEGIES = {
 }
 RESULT_LABELS = {
     "take_profit_hit": "Take-profit", "stop_loss_hit": "Stop-loss",
-    "forced_close_90min": "Geforceerd (tijdslimiet)", "unknown": "Onbekend",
+    "forced_close_90min": "Geforceerd (tijdslimiet)", "forced_close": "Geforceerd (sluiting)", "unknown": "Onbekend",
 }
 SESSION_START_MIN = 15 * 60 + 30   # 15:30 CEST
 SESSION_END_MIN = 22 * 60          # 22:00 CEST
@@ -204,6 +204,33 @@ def load_strategy_balances() -> dict:
 # Samenvatten
 # ---------------------------------------------------------------------------
 
+def load_signals_range(code: str, tot_en_met: str, dagen: int = 20) -> list[dict]:
+    """Alle signalen van één strategie in de `dagen` handelsdagen t/m `tot_en_met`."""
+    path = SIGNALS_PATH if code == "RVB" else VDB_SIGNALS_PATH
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path) as f:
+        for line in f:
+            try:
+                x = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if x.get("time", "")[:10] <= tot_en_met:
+                out.append(x)
+    dagen_set = sorted({x["time"][:10] for x in out})[-dagen:]
+    return [x for x in out if x["time"][:10] in dagen_set]
+
+
+def paper_summary(sigs: list[dict]) -> dict:
+    n = len(sigs)
+    wins = sum(1 for x in sigs if (x.get("paper_pnl") or 0) > 0)
+    pnl = sum(x.get("paper_pnl") or 0 for x in sigs)
+    rs = [x["paper_r"] for x in sigs if x.get("paper_r") is not None]
+    return {"n": n, "wins": wins, "pnl": round(pnl, 2), "winrate": round(100 * wins / n) if n else None,
+            "avg_r": round(sum(rs) / len(rs), 2) if rs else None}
+
+
 def summarize(trades: list[dict]) -> dict:
     n = len(trades)
     wins = sum(1 for t in trades if t["pnl"] > 0)
@@ -254,6 +281,13 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
     for ev in events:
         if not ev.get("strategy"):
             ev["strategy"] = _leid_strategie_af(ev.get("text", ""), sym_strat)
+    # PAPIEREN metrics (9 sep 2026): dry-run-signalen van RVB/VDB die door
+    # papier_uitkomsten.py zijn nagespeeld -- vandaag en laatste 20 dagen.
+    paper = {}
+    for code in ("RVB", "VDB"):
+        alle = [x for x in load_signals_range(code, iso) if x.get("paper_result")]
+        paper[code] = {"day": paper_summary([x for x in alle if x["time"].startswith(iso)]),
+                       "d20": paper_summary(alle)}
     dates = sorted({t["date"] for t in all_trades})
     prev_days = [d for d in dates if d < iso]
     next_days = [d for d in dates if d > iso]
@@ -262,6 +296,8 @@ def build_day(day: date, all_trades: list[dict]) -> dict:
         "total": summarize(day_trades), "week": summarize(week_trades),
         "per_strategy": per_strategy, "balance": round(sum(balances.values()), 2),
         "signals_skipped": [s for s in signals if s.get("status") == "skipped"],
+        "signals_dryrun": [s for s in signals if s.get("status") == "dry-run"],
+        "paper": paper,
         "vix": load_vix_report(iso),
         "events": events,
         "event_counts": {lvl: sum(1 for e in events if e.get("level") == lvl) for lvl in ("urgent", "warning", "info", "decision")},
@@ -298,7 +334,7 @@ header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
 .events{margin-top:26px}.events h2{font-size:16px;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline}.events .counts{font-size:12px;color:var(--ink-3);font-weight:400}
 .events ol{list-style:none;margin:0;padding:0;background:var(--sheet);border:1px solid var(--rule);border-radius:10px;overflow:hidden}.events li{display:grid;grid-template-columns:52px 74px 1fr 70px;gap:12px;padding:8px 14px;border-top:1px solid var(--rule);font-size:13px;align-items:baseline}.events li:first-child{border-top:0}
 .events .lvl{font-weight:600;font-size:12px}.events li.urgent .lvl{color:var(--loss)}.events li.warning .lvl{color:#b7791f}.events li.info .lvl{color:var(--ink-3)}.events li.urgent{background:#fdf3f2}.events .txt{white-space:pre-wrap;color:var(--ink-2)}.events li.urgent .txt{color:var(--ink)}.events .tg{font-size:12px;color:var(--ink-3);text-align:right}
-.events li.hidden{display:none}.events li{grid-template-columns:52px 62px 48px 1fr 70px}.events .strat{font-size:11px;font-weight:600;color:var(--ink-3);letter-spacing:.02em}.events li.decision .lvl{color:#2b6cb0}.events li.decision .txt{color:var(--ink-2)}.ev-filters button{font:inherit;font-size:12px;padding:2px 8px;border:1px solid var(--rule);border-radius:999px;background:var(--sheet);cursor:pointer;margin-left:4px}.ev-filters button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.papier{margin-top:8px;padding-top:8px;border-top:1px dashed var(--rule);font-size:12px;color:var(--ink-2)}.muted{color:var(--ink-3)}.events li.hidden{display:none}.events li{grid-template-columns:52px 62px 48px 1fr 70px}.events .strat{font-size:11px;font-weight:600;color:var(--ink-3);letter-spacing:.02em}.events li.decision .lvl{color:#2b6cb0}.events li.decision .txt{color:var(--ink-2)}.ev-filters button{font:inherit;font-size:12px;padding:2px 8px;border:1px solid var(--rule);border-radius:999px;background:var(--sheet);cursor:pointer;margin-left:4px}.ev-filters button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
 .footer{margin-top:30px;font-size:12px;color:var(--ink-3)}
 @media(max-width:720px){.scores{grid-template-columns:1fr}.events li{grid-template-columns:44px 56px 40px 1fr}.events .tg{display:none}.trade summary{grid-template-columns:8px 46px 40px 56px 1fr 70px 20px}.t-result{display:none}.detail{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.chev{transition:none}}
@@ -379,6 +415,18 @@ def trade_html(t: dict) -> str:
 {f'<p class="note">{e(t["note"])}</p>' if t['note'] else ''}</div></div></details>"""
 
 
+def papier_html(d: dict, code: str) -> str:
+    p = d.get("paper", {}).get(code)
+    if not p or not p["d20"]["n"]:
+        return ""
+    dd, d20 = p["day"], p["d20"]
+    vandaag = (f'{eur(dd["pnl"])} over {dd["n"]} signalen ({dd["wins"]} winst)' if dd["n"] else "geen signalen")
+    wr = f'{d20["winrate"]} % ({d20["n"]})' if d20["winrate"] is not None else "–"
+    avg_r = f'{d20["avg_r"]:+.1f} R' if d20["avg_r"] is not None else "–"
+    return (f'<div class="papier"><strong>Papier (dry-run)</strong> vandaag {vandaag} · '
+            f'20d {eur(d20["pnl"])} · winrate {wr} · gem. {avg_r}</div>')
+
+
 def render(d: dict) -> str:
     e = html.escape
     day = date.fromisoformat(d["date"])
@@ -403,7 +451,7 @@ def render(d: dict) -> str:
         cards.append(f"""<article class="score {code}"><h3>{e(naam)}</h3><div class="sub">{code} · {venster}</div>
 <div class="pnl {cls(dd['pnl'])}">{eur(dd['pnl'])}</div>
 <dl><dt>Trades</dt><dd>{dd['trades']} ({dd['wins']} winst)</dd><dt>Gem. R</dt><dd>{avg_r}</dd><dt>Winrate 20d</dt><dd>{wr}</dd><dt>Saldo</dt><dd>{eur(s['balance'], sign=False)}</dd></dl>
-<div class="wtd">Deze week {eur(ww['pnl'])} · 20 dagen {eur(d20['pnl'])}{sinds}</div></article>""")
+<div class="wtd">Deze week {eur(ww['pnl'])} · 20 dagen {eur(d20['pnl'])}{sinds}</div>{papier_html(d, code)}</article>""")
 
     trades = "".join(trade_html(t) for t in d["trades"]) or '<div class="empty">Geen trades. Zodra een trade sluit verschijnt hij hier met grafiek.</div>'
     sig_items = "".join(
@@ -411,6 +459,22 @@ def render(d: dict) -> str:
         f"{e(s.get('direction', ''))} — {e(s.get('reason', 'overgeslagen'))}</li>"
         for s in d["signals_skipped"])
     signals = f'<section class="signals"><h2>Signalen zonder trade ({len(d["signals_skipped"])})</h2><ul>{sig_items}</ul></section>' if sig_items else ""
+
+    def _dry(x):
+        basis = (f"<li>{e(x.get('time', '')[11:16])} <strong>{e(x.get('strategy', ''))}</strong> {e(x.get('symbol', ''))} "
+                 f"{e(x.get('direction', ''))} @ {float(x.get('entry', 0)):.2f}")
+        if x.get("take_profit"):
+            basis += f" · TP {float(x['take_profit']):.2f} / SL {float(x['stop_loss']):.2f}"
+        if x.get("paper_result"):
+            pnl = x.get("paper_pnl") or 0
+            basis += (f' — <span class="{cls(pnl)}">{e(RESULT_LABELS.get(x["paper_result"], x["paper_result"]))} '
+                      f'@ {float(x["paper_exit"]):.2f} ({e(x.get("paper_exit_time", "")[11:16])}) {eur(pnl)}</span>')
+        else:
+            basis += ' — <span class="muted">uitkomst volgt na sluiting</span>'
+        return basis + "</li>"
+    dry_items = "".join(_dry(x) for x in d.get("signals_dryrun", []))
+    signals = (f'<section class="signals"><h2>Dry-run-signalen ({len(d["signals_dryrun"])}) · papieren uitkomst</h2><ul>{dry_items}</ul></section>'
+               if dry_items else "") + signals
 
     LVL = {"urgent": "Urgent", "warning": "Let op", "info": "Info", "decision": "Besluit"}
     # CHRONOLOGISCH (9 sep 2026, op verzoek): het logboek leest als het
