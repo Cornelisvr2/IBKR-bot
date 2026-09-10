@@ -1,0 +1,108 @@
+RVB/VDB-backtest  2026-09-10_240d  |  23 symbolen  (1 trade/symbool/dag, 1% risico, cap €1000, fee €2.5, sluiting 21:55)
+
+RVB zoals de bot: volume > 3x baseline, SL 2%, TP 4%
+  signalen 1378  gevuld 1316 ( 95.5%)  winrate  45.1%  gem -0.02R  risico gem €20.00  bruto €-562  fees €-3290  NETTO €-3852  (€-2.93 per trade)
+
+RVB volume > 2x
+  signalen 2462  gevuld 2392 ( 97.2%)  winrate  46.7%  gem -0.01R  risico gem €20.00  bruto €-383  fees €-5980  NETTO €-6363  (€-2.66 per trade)
+
+RVB volume > 1.5x
+  signalen 3237  gevuld 3164 ( 97.7%)  winrate  47.3%  gem -0.01R  risico gem €20.00  bruto €-410  fees €-7910  NETTO €-8320  (€-2.63 per trade)
+
+RVB 3x — per richting
+bucket                        n   winrate    gem R   netto/trade
+LONG                        669     47.7%    -0.02         -2.98
+SHORT                       647     42.5%    -0.02         -2.87
+
+RVB 3x — per signaal-uur
+bucket                        n   winrate    gem R   netto/trade
+16:xx                       179     52.0%    +0.05         -1.58
+17:xx                       300     45.7%    +0.00         -2.46
+18:xx                       280     45.7%    -0.01         -2.67
+19:xx                       247     37.2%    -0.11         -4.78
+20:xx                       241     46.5%    -0.04         -3.23
+21:xx                        69     46.4%    +0.04         -1.78
+
+RVB 3x — per exit-reden
+bucket                        n   winrate    gem R   netto/trade
+SL                          131      0.0%    -1.00        -22.49
+TP                           27    100.0%    +2.00        +37.50
+sluiting                   1158     49.0%    +0.04         -1.66
+
+VDB zoals de bot: touch + bevestiging na 10-candle trend, SL touch-extreme, TP 2x
+  signalen 2676  gevuld 2622 ( 98.0%)  winrate  36.3%  gem +0.03R  risico gem €3.01  bruto €-80  fees €-6555  NETTO €-6635  (€-2.53 per trade)
+
+VDB TP 3x
+  signalen 2676  gevuld 2622 ( 98.0%)  winrate  29.6%  gem +0.02R  risico gem €3.01  bruto €-466  fees €-6555  NETTO €-7021  (€-2.68 per trade)
+
+VDB — per richting
+bucket                        n   winrate    gem R   netto/trade
+LONG                       1353     34.7%    -0.01         -2.50
+SHORT                      1269     38.1%    +0.09         -2.57
+
+VDB — per signaal-uur
+bucket                        n   winrate    gem R   netto/trade
+16:xx                       477     34.8%    +0.02         -2.59
+17:xx                       761     33.8%    -0.03         -2.67
+18:xx                       553     38.7%    +0.10         -2.38
+19:xx                       406     36.5%    +0.06         -2.35
+20:xx                       286     36.0%    -0.01         -2.77
+21:xx                       139     46.8%    +0.18         -2.17
+
+VDB — per exit-reden
+bucket                        n   winrate    gem R   netto/trade
+SL                         1615      0.0%    -1.00         -5.42
+TP                          816    100.0%    +2.00         +2.78
+sluiting                    191     71.7%    +0.38         -0.79
+
+RVB 3x — per symbool
+bucket                        n   winrate    gem R   netto/trade
+AAPL                         64     35.9%    -0.02         -3.00
+ADBE                         60     45.0%    -0.00         -2.53
+AMD                          41     46.3%    +0.04         -1.72
+AMZN                         58     46.6%    -0.03         -3.16
+AVGO                         55     38.2%    -0.09         -4.36
+BAC                          60     50.0%    -0.05         -3.46
+COIN                         66     39.4%    -0.09         -4.20
+CRM                          66     45.5%    -0.04         -3.21
+CSCO                         62     48.4%    +0.08         -0.98
+GOOGL                        55     47.3%    +0.00         -2.48
+GS                           67     50.7%    +0.01         -2.35
+INTC                         43     55.8%    +0.14         +0.39
+JPM                          49     49.0%    +0.00         -2.44
+META                         73     37.0%    -0.03         -3.10
+MSFT                         65     35.4%    -0.11         -4.65
+MSTR                         64     46.9%    +0.04         -1.74
+NFLX                         60     46.7%    -0.02         -2.99
+NVDA                         42     45.2%    +0.03         -1.97
+ORCL                         69     47.8%    -0.03         -3.11
+PLTR                         52     36.5%    -0.11         -4.76
+QCOM                         60     43.3%    -0.13         -5.04
+TSLA                         33     54.5%    +0.01         -2.27
+XOM                          52     57.7%    +0.01         -2.30
+
+VDB — per symbool
+bucket                        n   winrate    gem R   netto/trade
+AAPL                        114     39.5%    +0.10         -2.72
+ADBE                        105     33.3%    -0.04         -3.03
+AMD                         114     36.8%    +0.06         -2.07
+AMZN                        112     37.5%    +0.10         -2.36
+AVGO                        114     30.7%    -0.14         -3.27
+BAC                         102     41.2%    +0.17         -2.29
+COIN                        116     36.2%    +0.06         -2.60
+CRM                         104     39.4%    +0.06         -2.23
+CSCO                        119     37.8%    +0.06         -2.41
+GOOGL                       111     33.3%    -0.06         -2.69
+GS                          114     35.1%    +0.02         -2.63
+INTC                        110     38.2%    +0.01         -2.54
+JPM                         118     39.0%    +0.16         -2.38
+META                        121     29.8%    -0.14         -2.93
+MSFT                        113     33.6%    -0.06         -2.84
+MSTR                        114     37.7%    +0.04         -2.72
+NFLX                        128     31.2%    -0.10         -2.64
+NVDA                        116     41.4%    +0.23         -1.94
+ORCL                        130     37.7%    +0.05         -2.25
+PLTR                        101     42.6%    +0.23         -1.44
+QCOM                        115     34.8%    -0.02         -2.91
+TSLA                        118     32.2%    -0.05         -2.72
+XOM                         113     38.9%    +0.11         -2.48

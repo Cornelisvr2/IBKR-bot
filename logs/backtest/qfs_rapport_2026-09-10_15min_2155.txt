@@ -1,0 +1,63 @@
+QFS-backtest  2026-09-10_15min_2155  |  23 symbolen, 120 dagen, patronen op 15min, deadline 21:55
+Signalen: 1186  gevuld: 1070  (bot-regels: 1 trade/symbool/dag, 1% risico, cap €1000, fee €2.5)
+
+TP = overkant van de box (zoals de bot nu)
+  signalen 1186  gevuld 1069 ( 90.1%)  winrate  32.6%  gem +0.08R  risico gem €4.50  bruto €+281  fees €-2672  NETTO €-2391  (€-2.24 per trade)
+
+TP = 2× stop
+  signalen 1186  gevuld 1070 ( 90.2%)  winrate  38.8%  gem +0.07R  risico gem €4.51  bruto €+251  fees €-2675  NETTO €-2424  (€-2.27 per trade)
+
+TP = 3× stop
+  signalen 1186  gevuld 1070 ( 90.2%)  winrate  34.9%  gem +0.10R  risico gem €4.51  bruto €+364  fees €-2675  NETTO €-2311  (€-2.16 per trade)
+
+Per patroon (TP-variant: r_2x)
+bucket                          n   winrate    gem R   netto/trade
+bearish_engulfing             486     42.2%    +0.16         -1.97
+bullish_engulfing             426     36.9%    +0.01         -2.51
+hamer                          76     36.8%    +0.02         -2.21
+inverted_hamer                 82     30.5%    -0.13         -2.82
+
+Per richting (TP-variant: r_2x)
+bucket                          n   winrate    gem R   netto/trade
+LONG                          502     36.9%    +0.01         -2.46
+SHORT                         568     40.5%    +0.12         -2.09
+
+Per boxgrootte (TP-variant: r_2x)
+bucket                          n   winrate    gem R   netto/trade
+range <0.5 ATR                647     38.6%    +0.05         -2.60
+range >=0.5 ATR               423     39.0%    +0.10         -1.76
+
+Per signaal-uur (TP-variant: r_2x)
+bucket                          n   winrate    gem R   netto/trade
+16:xx                         317     38.5%    +0.08         -1.97
+17:xx                         253     38.3%    +0.08         -2.41
+18:xx                         181     34.3%    -0.02         -2.84
+19:xx                         138     41.3%    +0.11         -2.14
+20:xx                         110     39.1%    +0.04         -2.33
+21:xx                          71     47.9%    +0.15         -1.78
+
+Per symbool (TP-variant: r_2x)
+bucket                          n   winrate    gem R   netto/trade
+AAPL                           55     36.4%    +0.04         -3.08
+ADBE                           45     37.8%    -0.02         -2.51
+AMD                            45     46.7%    +0.24         -0.31
+AMZN                           50     48.0%    +0.24         -2.05
+AVGO                           48     29.2%    -0.21         -4.16
+BAC                            47     36.2%    -0.01         -2.10
+COIN                           40     42.5%    +0.13         -0.32
+CRM                            46     37.0%    +0.11         -2.34
+CSCO                           47     36.2%    +0.01         -3.10
+GOOGL                          43     46.5%    +0.35         -1.61
+GS                             41     34.1%    -0.00         -2.95
+INTC                           46     39.1%    +0.18         -1.53
+JPM                            51     27.5%    -0.32         -3.12
+META                           41     36.6%    +0.09         -2.34
+MSFT                           54     22.2%    -0.39         -4.24
+MSTR                           51     39.2%    +0.12         -1.51
+NFLX                           47     55.3%    +0.57         -0.41
+NVDA                           53     34.0%    -0.05         -2.68
+ORCL                           46     41.3%    +0.06         -2.03
+PLTR                           49     38.8%    +0.04         -3.33
+QCOM                           39     56.4%    +0.49         -0.54
+TSLA                           41     41.5%    -0.01         -2.97
+XOM                            45     37.8%    +0.13         -1.74

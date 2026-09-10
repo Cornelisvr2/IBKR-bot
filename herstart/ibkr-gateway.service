@@ -1,0 +1,14 @@
+[Unit]
+Description=IBKR Client Portal Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ibkr/gateway
+ExecStart=/opt/ibkr/gateway/bin/run.sh root/conf.yaml
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+date,time,symbol,direction,news_score,news_reason,atr,atr_ratio,entry_price,take_profit,stop_loss,quantity,result,pnl_estimate,pnl_note,strategy,entry_time,exit_time,exit_price,pnl_net,fees,oca_group,chart
+2026-08-20,18:17:26,AAPL,SHORT,,,,,316.0,315.0,320.0,12,take_profit_hit,12.0,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-08-24,13:31:14,NVDA,LONG,,,,,216.73,217.49782,216.34609,52.0955,stop_loss_hit,-19.99998340499927,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-08-26,13:56:56,AAPL,SHORT,,,,,311.68,310.6,312.22,3.1763,stop_loss_hit,-1.715202000000065,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-08-27,14:39:01,NVDA,SHORT,,,,,225.825139,223.95965999999999,226.75017,4.3747,take_profit_hit,8.159423583299997,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-08-28,13:49:48,CRM,SHORT,,,,,259.155225,254.81538,260.20731,3.8339,stop_loss_hit,-4.142241407500183,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-08-31,13:47:58,CRM,SHORT,,,,,258.513506,256.553,258.5585,3.8288,stop_loss_hit,-1.403232227199957,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-01,13:47:09,MSFT,SHORT,,,,,505.32,499.09749999999997,501.24625,1.9688,stop_loss_hit,-0.2756319999999732,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-01,14:25:37,CRM,SHORT,,,,,258.904237,257.39492,259.65253999999993,3.8063,stop_loss_hit,-2.9908497068999025,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-03,14:44:41,GOOGL,SHORT,,,,,342.089085,340.07,342.81,2.8687,stop_loss_hit,-2.1541497170649446,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-03,14:52:51,ADBE,SHORT,,,,,289.38,284.61,292.88,3.3911,take_profit_hit,16.187280206,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-03,14:54:33,JPM,SHORT,,,,,358.64,357.57,360.56,2.7363,stop_loss_hit,-5.582052000000056,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-03,15:00:17,TSLA,SHORT,,,,,380.36,367.47,382.11,2.5912,forced_close_90min,,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-03,15:14:28,META,SHORT,,,,,615.014931,604.5,616.82,1.5956,forced_close_90min,1.507731903599995,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-04,14:34:57,ADBE,LONG,,,,,265.774376,275.81,265.14,3.6921,stop_loss_hit,-3.0805996296000746,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-04,15:00:14,PLTR,LONG,,,,,176.5,181.65,175.73,5.5428,forced_close_90min,1.3857,"benadering o.b.v. beoogde prijzen, niet exacte fill",,,,,,,,
+2026-09-08,14:21:30,AVGO,SHORT,,,,,367.274978,362.74,370.24,2.6628,stop_loss_hit,-8.014913499600112,exacte fill-prijzen,,,,,,,,
+2026-09-08,14:27:30,AMD,SHORT,,,,,495.09,490.14,498.59,1.9843,stop_loss_hit,-7.153322128000011,exacte fill-prijzen,,,,,,,,
+2026-09-08,15:00:28,JPM,LONG,,,,,354.04,356.63,353.32,2.7474,forced_close_90min,,benadering o.b.v. beoogde prijzen (fill niet volledig opgehaald),,,,,,,,
+2026-09-08,15:00:29,NFLX,LONG,,,,,76.56,77.72,76.29,12.7736,forced_close_90min,-0.7664160000000291,exacte fill-prijzen,,,,,,,,
+2026-09-09,15:11:46,AMZN,LONG,,,,,251.78,253.48,251.1,3.9651,stop_loss_hit,-2.84522094660002,exacte fill-prijzen,QFS,16:57:42,17:11:46,251.1,-5.35,2.5,QFS_AMZN_LONG_25220,AMZN_20260909_203740.png
+2026-09-09,16:00:07,INTC,SHORT,,,,,105.81,103.46,106.76,9.5193,forced_close_90min,3.4269479999999946,exacte fill-prijzen,QFS,16:45:17,18:00:07,105.45,0.93,2.5,QFS_INTC_SHORT_10505,INTC_20260909_203741.png
+2026-09-10,13:47:07,AAPL,SHORT,,,,,320.4288,319.1,321.1,3.125,stop_loss_hit,-2.066249843749901,exacte fill-prijzen,TTS,15:46:04,15:47:06,321.08999995,-4.566249843749901,2.5,TTS_AAPL_SHORT_32000,AAPL_20260910_204826.png
+2026-09-10,13:47:34,META,LONG,,,,,647.3308,650.0,645.99,1.5444,stop_loss_hit,-2.392391352779964,exacte fill-prijzen,TTS,15:46:37,15:47:09,645.78172505,-4.892391352779963,2.5,TTS_META_LONG_64750,META_20260910_204827.png
+2026-09-10,14:15:22,BAC,LONG,,,,,62.33,62.47516,62.257419999999996,16.0436,take_profit_hit,2.4065399999999775,exacte fill-prijzen,TTS,16:10:19,16:15:21,62.48,-0.09346000000002253,2.5,TTS_BAC_LONG_6233,BAC_20260910_204828.png
+2026-09-10,14:15:51,JPM,LONG,,,,,351.5,352.48174,351.00913,2.845,take_profit_hit,2.8049994422500304,exacte fill-prijzen,TTS,15:51:44,16:15:51,352.48594005,0.3049994422500304,2.5,TTS_JPM_LONG_35150,JPM_20260910_204828.png
+2026-09-10,14:22:13,GOOGL,SHORT,,,,,330.0,329.13668,330.43165999999997,3.0303,stop_loss_hit,-1.3636349999999655,exacte fill-prijzen,TTS,16:20:10,16:22:12,330.45,-3.8636349999999657,2.5,TTS_GOOGL_SHORT_33000,GOOGL_20260910_204829.png
+2026-09-10,14:38:46,QCOM,SHORT,,,,,174.90251,173.79,175.46,5.7176,stop_loss_hit,-3.702088824000027,exacte fill-prijzen,TTS,16:36:14,16:38:46,175.55,-6.202088824000027,2.5,TTS_QCOM_SHORT_17490,QCOM_20260910_204829.png
+2026-09-10,16:08:57,MSTR,LONG,,,,,130.9,133.86,129.42,7.6383,stop_loss_hit,-11.839365000000088,exacte fill-prijzen,VDB,16:41:05,18:08:55,129.35,-14.339365000000088,2.5,VDB_MSTR_LONG_13091,MSTR_20260910_204830.png
+2026-09-10,16:46:00,TSLA,LONG,,,,,365.89,367.15,365.26,2.7324,take_profit_hit,3.4647953650200605,exacte fill-prijzen,VDB,17:25:11,18:45:59,367.15804105,0.9647953650200605,2.5,VDB_TSLA_LONG_36598,TSLA_20260910_204831.png
+2026-09-10,17:53:52,AVGO,LONG,,,,,362.76,363.4,362.44,2.7382,stop_loss_hit,-0.43811199999991285,exacte fill-prijzen,VDB,19:45:48,19:53:51,362.6,-2.938111999999913,2.5,VDB_AVGO_LONG_36276,AVGO_20260910_204832.png
+2026-09-10,18:19:18,AMZN,LONG,,,,,252.25,252.94,251.9,3.9379,stop_loss_hit,-1.457023000000018,exacte fill-prijzen,VDB,19:46:08,20:19:17,251.88,-3.957023000000018,2.5,VDB_AMZN_LONG_25225,AMZN_20260910_204833.png

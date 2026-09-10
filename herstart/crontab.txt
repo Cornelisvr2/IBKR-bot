@@ -1,0 +1,33 @@
+# Edit this file to introduce tasks to be run by cron.
+# 
+# Each task to run has to be defined through a single line
+# indicating with different fields when the task will be run
+# and what command to run for the task
+# To define the time you can provide concrete values for
+# minute (m), hour (h), day of month (dom), month (mon),
+# and day of week (dow) or use '*' in these fields (for 'any').
+# Notice that tasks will be started based on the cron's system
+# daemon's notion of time and timezones.
+# Output of the crontab jobs (including errors) is sent through
+# email to the user the crontab file belongs to (unless redirected).
+# For example, you can run a backup of all your user accounts
+# at 5 a.m every week with:
+# 0 5 * * 1 tar -zcf /var/backups/home.tgz /home/
+# For more information see the manual pages of crontab(5) and cron(8)
+# m h  dom mon dow   command
+
+46 15 * * 1-5 /opt/strategy/run_cycle.sh --live >> /opt/strategy/logs/cron.log 2>&1
+0 8 * * 1-5 /opt/strategy/check_ibkr_auth.sh >> /opt/strategy/logs/cron.log 2>&1
+0 16 * * 1-5 /opt/strategy/run_cycle_vix_rider.sh --live >> /opt/strategy/logs/cron_vix_rider.log 2>&1
+10 15 * * 1-5 /opt/strategy/vix_daily_report.sh >> /opt/strategy/logs/cron.log 2>&1
+0 3 * * * /root/hbar_bot/recalibrate_cron.sh >> /root/hbar_bot/logs/recalibrate.log 2>&1
+50 15 * * 1-5 cd /opt/strategy && set -a && source /etc/environment && set +a && python3 shadow_scan.py >> /opt/strategy/logs/shadow_scan.log 2>&1
+10 22 * * 1-5 cd /opt/strategy && set -a && source /etc/environment && set +a && python3 shadow_outcome_checker.py >> /opt/strategy/logs/shadow_outcome.log 2>&1
+0 9 * * * /root/hbar_bot/daily_status_cron.sh >> /root/hbar_bot/logs/daily_status.log 2>&1
+0 * * * * cd /root/hbar_bot && docker compose exec -T dashboard python3 hourly_snapshot.py >> /root/hbar_bot/logs/hourly_snapshot.log 2>&1
+*/5 * * * * /root/hbar_bot/heartbeat_check.sh >> /root/hbar_bot/logs/heartbeat.log 2>&1
+0 4 * * * /root/hbar_bot/db_backup.sh >> /root/hbar_bot/logs/db_backup.log 2>&1
+0   15   * * 1-5  /opt/strategy/run_rvb_cycle.sh baseline
+*/5 16-21 * * 1-5  /opt/strategy/run_rvb_cycle.sh scan --live
+*/5 16-21 * * 1-5 /opt/strategy/run_vwap_bounce_cycle.sh --live
+10 22 * * 1-5 cd /opt/strategy && set -a && source /etc/environment && set +a && { python3 vul_grafieken_aan.py --einde-dag; python3 papier_uitkomsten.py; } >> /opt/strategy/logs/einde_dag_grafiek.log 2>&1
