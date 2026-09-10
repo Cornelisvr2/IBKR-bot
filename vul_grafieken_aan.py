@@ -160,11 +160,21 @@ def maak_grafiek(rij, volgnummer=0):
     direction = rij.get("direction") or ("SHORT" if float(rij["stop_loss"]) > float(rij["entry_price"]) else "LONG")
     entry, tp, sl = float(rij["entry_price"]), float(rij["take_profit"]), float(rij["stop_loss"])
     box = box_uit_logs(symbool, datum)
+    dag = datetime.fromisoformat(datum).date()
+    dagen_terug = max((datetime.now().date() - dag).days + 1, 1)
+    if box is None:
+        # TOEGEVOEGD (10 sep 2026): de ECHTE 15-min openingscandle als box,
+        # niet de teruggerekende (mogelijk halve) box waar de bot mee rekende.
+        try:
+            kw = [c for c in get_historical_candles(symbool, duration=f"{dagen_terug}d", bar_size="15min")
+                  if c.timestamp.date() == dag and c.timestamp.hour == 15 and c.timestamp.minute == 30]
+            if kw:
+                box = (kw[0].high, kw[0].low)
+        except Exception as e:
+            print(f"  {symbool} {datum}: openingscandle niet opgehaald ({e}), val terug op formule.")
     if box is None:
         bereik = abs(entry - tp) / 0.382
         box = (entry, entry - bereik) if direction == "SHORT" else (entry + bereik, entry)
-    dag = datetime.fromisoformat(datum).date()
-    dagen_terug = max((datetime.now().date() - dag).days + 1, 1)
     candles = [c for c in get_historical_candles(symbool, duration=f"{dagen_terug}d", bar_size="5min")
                if c.timestamp.date() == dag]
     if not candles:
