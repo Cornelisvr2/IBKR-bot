@@ -295,7 +295,7 @@ def get_market_data_snapshot(conid: int) -> dict:
     try:
         response = session.get(
             f"{BASE_URL}/iserver/marketdata/snapshot",
-            params={"conids": str(conid), "fields": "31,84,86"},
+            params={"conids": str(conid), "fields": "31,84,86,6509"},  # 6509 = datastatus (R/D), voor box_guard.py
             timeout=15,
         )
         response.raise_for_status()

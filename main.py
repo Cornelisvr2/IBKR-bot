@@ -156,6 +156,20 @@ def run_symbol_cycle(symbol: str, capital: float, dry_run: bool) -> dict:
         logger.warning(reason)
         return {"status": "skipped", "symbol": symbol, "reason": reason}
 
+    # BOX-GUARD (bewuste toevoeging, 10 sep 2026 -- zie box_guard.py):
+    # het origineel neemt stilzwijgend aan dat de koers om 15:46 nog IN
+    # de openingsrange zit. Bij een uitbraak vult de limiet anders
+    # direct tegen de trend in (AAPL/META, 10 sep 2026: 15:46 in,
+    # 15:47 uit op de stop). Alleen in live-modus; bij een mislukte
+    # snapshot wordt NIET geblokkeerd (origineel gedrag blijft gelden).
+    if not dry_run:
+        from box_guard import fetch_last_price, check_price_inside_box
+        last_price, data_status = fetch_last_price(symbol)
+        guard = check_price_inside_box(signal.direction, signal.entry_price, last_price, data_status)
+        logger.info(f"Box-guard {symbol}: {guard.reason}")
+        if not guard.allowed:
+            return {"status": "skipped", "symbol": symbol, "reason": guard.reason}
+
     plan = calculate_exit_levels(signal, capital=capital)
     if plan.position_size * plan.entry_price < 5.0:
         reason = f"Positiewaarde te klein voor {symbol} met €{capital:.2f} kapitaal."
