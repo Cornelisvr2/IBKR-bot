@@ -86,6 +86,11 @@ def fetch_last_price(symbol: str) -> tuple[float | None, str]:
     veld 6509 = datastatus). Geeft (koers, status); koers is None bij
     een fout. Twee aanroepen: de eerste initialiseert de datastroom.
     """
+    import os
+    if os.environ.get("DATA_PROVIDER", "").lower() == "alpaca":
+        from alpaca_data import is_configured, get_last_price
+        if is_configured():
+            return get_last_price(symbol)
     try:
         import time
         from ibkr_web_api import resolve_conid, get_market_data_snapshot

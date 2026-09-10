@@ -108,6 +108,18 @@ def get_historical_candles(symbol: str, duration: str = "5d", bar_size: str = "1
     aanname gebaseerd op IBKR's documentatie-conventies, te bevestigen
     bij het eerste live gebruik.
     """
+    # DATAPROVIDER-SCHAKELAAR (10 sep 2026): met DATA_PROVIDER=alpaca (en
+    # ALPACA_API_KEY/SECRET) komen de INTRADAY-bars realtime van Alpaca's
+    # gratis IEX-feed (zie alpaca_data.py) -- de IBKR-feed op het paper-
+    # account is vertraagd en leverde half gevulde candles. Dagbars voor
+    # de ATR blijven bij IBKR: daar maakt vertraging niet uit.
+    import os
+    if os.environ.get("DATA_PROVIDER", "").lower() == "alpaca" and bar_size.lower() != "1d":
+        from alpaca_data import is_configured, get_historical_candles as alpaca_candles
+        if is_configured():
+            return alpaca_candles(symbol, duration=duration, bar_size=bar_size)
+        logger.error("DATA_PROVIDER=alpaca maar ALPACA_API_KEY/SECRET ontbreken -- terugval op IBKR (vertraagd!).")
+
     from ibkr_web_api import resolve_conid, get_historical_bars
 
     conid = resolve_conid(symbol)
