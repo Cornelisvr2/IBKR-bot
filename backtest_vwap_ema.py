@@ -87,7 +87,7 @@ def vwap_reeks(bars: list[Bar]) -> list[float]:
 
 
 def simuleer_dag(symbol: str, dag: date, c5: list[Bar], vwap: list[float], ema: list[float],
-                 pmh: float | None, pml: float | None, entry_mode: str) -> VETrade | None:
+                 pmh: float | None, pml: float | None, entry_mode: str, richtingen=("LONG", "SHORT")) -> VETrade | None:
     eerste = minuten(datetime.combine(dag, EERSTE_ENTRY)); deadline = minuten(datetime.combine(dag, DEADLINE))
     pm_ok = pmh is not None
     boven_teller = onder_teller = 0            # opeenvolgende closes boven/onder VWAP
@@ -106,7 +106,7 @@ def simuleer_dag(symbol: str, dag: date, c5: list[Bar], vwap: list[float], ema: 
         if m > deadline: break
 
         # --- LONG (alleen boven VWAP) ---
-        if c.c > vw:
+        if c.c > vw and "LONG" in richtingen:
             setup = None
             if pm_ok and pm_break_long and c.l <= pmh * (1 + RETEST_TOL) and c.c > pmh:
                 setup = "PMH-retest"
@@ -118,7 +118,7 @@ def simuleer_dag(symbol: str, dag: date, c5: list[Bar], vwap: list[float], ema: 
                 return voer_uit(symbol, dag, c5, vwap, ema, i, "LONG", setup, a_plus,
                                 pm_ok and c.c > pmh, pm_ok, entry_mode)
         # --- SHORT (alleen onder VWAP) ---
-        if c.c < vw:
+        if c.c < vw and "SHORT" in richtingen:
             setup = None
             if pm_ok and pm_break_short and c.h >= pml * (1 - RETEST_TOL) and c.c < pml:
                 setup = "PML-retest"
@@ -223,6 +223,7 @@ def main():
     ap.add_argument("--dagen", type=int, default=240)
     ap.add_argument("--symbolen", default=None)
     ap.add_argument("--ema", type=int, default=8)
+    ap.add_argument("--rs-top", type=int, default=0, help="alleen long in de N sterkste / short in de N zwakste om 15:40 (0 = uit)")
     ap.add_argument("--vwap-premarket", action="store_true", help="VWAP ankeren op de eerste pre-market bar i.p.v. 15:30")
     args = ap.parse_args()
     if args.symbolen:
@@ -234,44 +235,71 @@ def main():
     varianten = {"entry=close": "close", "entry=break": "break"}
     resultaten: dict[str, list[VETrade]] = {k: [] for k in varianten}
     dagen_totaal = dagen_zonder_pm = 0
+
+    # pas 1: laden en per (dag, symbool) de beweging tot 15:40 t.o.v. de vorige RTH-close
+    data = {}; beweging: dict[date, dict[str, float]] = defaultdict(dict)
     for s in symbolen:
         try:
             alle = haal_bars(s, args.dagen, "5Min")
-            rth = [b for b in alle if in_rth(b.t)]
-            pm_per_dag: dict[date, list[Bar]] = defaultdict(list)
-            for b in alle:
-                if not in_rth(b.t) and PM_START <= b.t.time() < OPEN:
-                    pm_per_dag[b.t.date()].append(b)
-            per_dag: dict[date, list[Bar]] = defaultdict(list)
-            for b in rth:
-                per_dag[b.t.date()].append(b)
-            # EMA doorlopend over de RTH-reeks (zoals TradingView met extended hours uit)
-            ema_alle = ema_reeks([b.c for b in rth], args.ema)
-            ema_idx = {(b.t): e for b, e in zip(rth, ema_alle)}
-            n0 = {k: len(v) for k, v in resultaten.items()}
-            for dag in sorted(per_dag):
-                c5 = per_dag[dag]
-                if len(c5) < 60:
-                    continue
-                dagen_totaal += 1
-                pm = pm_per_dag.get(dag, [])
-                pmh = max(b.h for b in pm) if pm else None
-                pml = min(b.l for b in pm) if pm else None
-                if not pm: dagen_zonder_pm += 1
-                if args.vwap_premarket and pm:
-                    vw = vwap_reeks(pm + c5)[len(pm):]
-                else:
-                    vw = vwap_reeks(c5)
-                em = [ema_idx[b.t] for b in c5]
-                for naam, mode in varianten.items():
-                    t = simuleer_dag(s, dag, c5, vw, em, pmh, pml, mode)
-                    if t: resultaten[naam].append(t)
-            print(f"{s}: " + ", ".join(f"{k} {len(v) - n0[k]}" for k, v in resultaten.items()))
         except Exception as e:
-            print(f"{s}: FOUT {e}")
+            print(f"{s}: FOUT {e}"); continue
+        rth = [b for b in alle if in_rth(b.t)]
+        pm_per_dag: dict[date, list[Bar]] = defaultdict(list)
+        for b in alle:
+            if not in_rth(b.t) and PM_START <= b.t.time() < OPEN:
+                pm_per_dag[b.t.date()].append(b)
+        per_dag: dict[date, list[Bar]] = defaultdict(list)
+        for b in rth:
+            per_dag[b.t.date()].append(b)
+        ema_alle = ema_reeks([b.c for b in rth], args.ema)
+        ema_idx = {(b.t): e for b, e in zip(rth, ema_alle)}
+        data[s] = (per_dag, pm_per_dag, ema_idx)
+        dagen = sorted(per_dag)
+        for i in range(1, len(dagen)):
+            vorige_close = per_dag[dagen[i - 1]][-1].c
+            c5 = per_dag[dagen[i]]
+            om_1540 = [b for b in c5 if b.t.time() <= EERSTE_ENTRY]
+            if om_1540 and vorige_close > 0:
+                beweging[dagen[i]][s] = om_1540[-1].c / vorige_close - 1
+
+    def toegestaan(dag, s):
+        if not args.rs_top:
+            return ("LONG", "SHORT")
+        rang = sorted(beweging.get(dag, {}), key=lambda x: beweging[dag][x])
+        if len(rang) < 2 * args.rs_top:
+            return ()
+        r = ()
+        if s in rang[-args.rs_top:]: r += ("LONG",)
+        if s in rang[:args.rs_top]: r += ("SHORT",)
+        return r
+
+    # pas 2: simuleren
+    for s, (per_dag, pm_per_dag, ema_idx) in data.items():
+        n0 = {k: len(v) for k, v in resultaten.items()}
+        for dag in sorted(per_dag):
+            c5 = per_dag[dag]
+            if len(c5) < 60:
+                continue
+            dagen_totaal += 1
+            pm = pm_per_dag.get(dag, [])
+            pmh = max(b.h for b in pm) if pm else None
+            pml = min(b.l for b in pm) if pm else None
+            if not pm: dagen_zonder_pm += 1
+            richtingen = toegestaan(dag, s)
+            if not richtingen:
+                continue
+            if args.vwap_premarket and pm:
+                vw = vwap_reeks(pm + c5)[len(pm):]
+            else:
+                vw = vwap_reeks(c5)
+            em = [ema_idx[b.t] for b in c5]
+            for naam, mode in varianten.items():
+                t = simuleer_dag(s, dag, c5, vw, em, pmh, pml, mode, richtingen)
+                if t: resultaten[naam].append(t)
+        print(f"{s}: " + ", ".join(f"{k} {len(v) - n0[k]}" for k, v in resultaten.items()))
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    stempel = f"{date.today()}_{args.dagen}d_ema{args.ema}{'_pmvwap' if args.vwap_premarket else ''}"
+    stempel = f"{date.today()}_{args.dagen}d_ema{args.ema}{'_pmvwap' if args.vwap_premarket else ''}{f'_rs{args.rs_top}' if args.rs_top else ''}"
     hoofd = resultaten["entry=close"]
     if hoofd:
         with open(os.path.join(OUT_DIR, f"vwapema_trades_{stempel}.csv"), "w", newline="") as f:
@@ -281,7 +309,7 @@ def main():
 
     delen = [f"VWAP+EMA-backtest  {stempel}  |  {len(symbolen)} symbolen, {dagen_totaal} symbool-dagen, "
              f"{dagen_zonder_pm} zonder pre-market-data  (1 trade/symbool/dag, 1% risico, cap €1000, "
-             f"fee €{FEE_ROUND_TRIP}, entries 15:40-18:00, sluiting 21:55)",
+             f"fee €{FEE_ROUND_TRIP}, entries 15:40-18:00, sluiting 21:55" + (f", RS-filter top/bottom {args.rs_top}" if args.rs_top else "") + ")",
              f"Signalen per maand per aandeel: {len(hoofd) / max(dagen_totaal, 1) * 21:.1f}"]
     for naam, ts in resultaten.items():
         delen.append(rapport(ts, f"{naam} — exit EMA{args.ema}-close (video)", "r_ema"))
