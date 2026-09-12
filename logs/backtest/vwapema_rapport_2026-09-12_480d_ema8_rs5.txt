@@ -1,0 +1,90 @@
+VWAP+EMA-backtest  2026-09-12_480d_ema8_rs5  |  23 symbolen, 11439 symbool-dagen, 3 zonder pre-market-data  (1 trade/symbool/dag, 1% risico, cap €1000, fee €2.5, entries 15:40-18:00, sluiting 21:55, RS-filter top/bottom 5)
+Signalen per maand per aandeel: 7.2
+
+entry=close — exit EMA8-close (video)
+  signalen 3940  gevuld 3940 (100.0%)  winrate  30.5%  profit factor 1.07  gem +0.06R  risico gem €4.96  bruto €+672  fees €-9850  NETTO €-9178  (€-2.33 per trade)
+
+entry=close — exit VWAP-close
+  signalen 3940  gevuld 3940 (100.0%)  winrate  23.5%  profit factor 1.06  gem +0.07R  risico gem €4.96  bruto €+637  fees €-9850  NETTO €-9213  (€-2.34 per trade)
+
+entry=close — vaste TP 2x
+  signalen 3940  gevuld 3940 (100.0%)  winrate  34.1%  profit factor 1.06  gem -0.01R  risico gem €4.96  bruto €+674  fees €-9850  NETTO €-9176  (€-2.33 per trade)
+
+entry=break — exit EMA8-close (video)
+  signalen 3940  gevuld 2785 ( 70.7%)  winrate  36.8%  profit factor 1.04  gem +0.02R  risico gem €7.23  bruto €+365  fees €-6962  NETTO €-6597  (€-2.37 per trade)
+
+entry=break — exit VWAP-close
+  signalen 3940  gevuld 2785 ( 70.7%)  winrate  28.7%  profit factor 1.05  gem +0.02R  risico gem €7.23  bruto €+514  fees €-6962  NETTO €-6449  (€-2.32 per trade)
+
+entry=break — vaste TP 2x
+  signalen 3940  gevuld 2785 ( 70.7%)  winrate  36.3%  profit factor 1.06  gem +0.02R  risico gem €7.23  bruto €+683  fees €-6962  NETTO €-6279  (€-2.25 per trade)
+
+Hoofdvariant (entry=close, exit EMA) — per setup
+bucket                        n   winrate    gem R   netto/trade
+PMH-retest                  871     34.9%    +0.08         -2.32
+PML-retest                  899     36.3%    +0.05         -2.18
+VWAP+PMH-retest              53     32.1%    -0.09         -3.63
+VWAP+PML-retest              67     23.9%    -0.05         -2.74
+VWAP-retest                2050     26.2%    +0.05         -2.35
+
+— per richting
+bucket                        n   winrate    gem R   netto/trade
+LONG                       1961     31.4%    +0.07         -2.27
+SHORT                      1979     29.6%    +0.04         -2.39
+
+— A+ confluentie
+bucket                        n   winrate    gem R   netto/trade
+A+ (VWAP≈PM-niveau)         902     34.7%    +0.10         -2.05
+gewoon                     3038     29.2%    +0.04         -2.41
+
+— positie t.o.v. pre-market range
+bucket                        n   winrate    gem R   netto/trade
+binnen PM-range             721     26.1%    -0.04         -2.65
+boven PMH/onder PML        3217     31.5%    +0.08         -2.26
+geen PM-data                  2     50.0%    -0.43         -4.06
+
+— per exit-reden
+bucket                        n   winrate    gem R   netto/trade
+EMA-close                  2016     59.6%    +1.06         +1.38
+SL                         1924      0.0%    -1.00         -6.22
+
+— per signaal-uur
+bucket                        n   winrate    gem R   netto/trade
+15:xx                      2442     31.2%    +0.02         -2.31
+16:xx                      1092     29.4%    +0.11         -2.34
+17:xx                       386     28.8%    +0.14         -2.41
+18:xx                        20     35.0%    -0.01         -2.36
+
+— per max gunstige uitslag (wat een perfecte exit had kunnen halen)
+bucket                        n   winrate    gem R   netto/trade
+MFE 0R+                     910      2.5%    -0.80         -7.31
+MFE 1R+                     721     26.9%    -0.42         -4.01
+MFE 2R+                     579     42.1%    -0.10         -1.55
+MFE 3R+                     356     46.3%    +0.16         -0.66
+MFE 4R+                    1374     41.8%    +0.91         +1.09
+
+— per symbool
+bucket                        n   winrate    gem R   netto/trade
+AAPL                        147     28.6%    +0.01         -2.46
+ADBE                        190     35.3%    +0.29         -1.48
+AMD                         231     34.6%    +0.06         -1.76
+AMZN                        114     29.8%    -0.02         -2.32
+AVGO                        192     31.2%    -0.05         -2.91
+BAC                         111     27.9%    -0.08         -2.73
+COIN                        253     30.0%    +0.06         -2.13
+CRM                         176     30.7%    +0.21         -1.87
+CSCO                        114     33.3%    +0.37         -1.63
+GOOGL                       141     27.7%    -0.25         -2.89
+GS                          110     24.5%    -0.15         -2.95
+INTC                        232     30.2%    +0.23         -2.43
+JPM                         115     34.8%    +0.08         -2.12
+META                        133     24.1%    -0.01         -3.04
+MSFT                        110     29.1%    +0.00         -2.28
+MSTR                        259     30.5%    +0.08         -2.22
+NFLX                        151     31.8%    +0.19         -1.90
+NVDA                        182     28.0%    -0.10         -2.71
+ORCL                        192     29.7%    -0.12         -2.51
+PLTR                        239     30.1%    +0.23         -2.17
+QCOM                        158     23.4%    -0.01         -3.29
+TSLA                        197     35.5%    -0.03         -2.12
+XOM                         193     33.7%    +0.07         -2.40
